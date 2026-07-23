@@ -686,25 +686,27 @@ class TestResolveMiniMaxOAuthForAux:
 
         assert mock_kwargs.call_args.kwargs["is_oauth"] is False
 
-    def test_missing_login_does_not_fall_through_to_fake_api_key(self):
+    def test_missing_login_does_not_fall_through_to_fake_api_key(self, caplog):
         from agent.auxiliary_client import resolve_provider_client
         from hermes_cli.auth import AuthError
 
-        with patch(
-            "hermes_cli.auth.resolve_minimax_oauth_runtime_credentials",
-            side_effect=AuthError(
-                "not logged in",
-                provider="minimax-oauth",
-                code="not_logged_in",
-                relogin_required=True,
+        with (
+            caplog.at_level(logging.WARNING),
+            patch(
+                "hermes_cli.auth.resolve_minimax_oauth_runtime_credentials",
+                side_effect=AuthError(
+                    "not logged in",
+                    provider="minimax-oauth",
+                    code="not_logged_in",
+                    relogin_required=True,
+                ),
             ),
         ):
-            client, model = resolve_provider_client(
-                "minimax-oauth", "MiniMax-M2.7"
-            )
+            client, model = resolve_provider_client("minimax-oauth", "MiniMax-M2.7")
 
         assert client is None
         assert model is None
+        assert "Auxiliary MiniMax OAuth is not logged in" in caplog.text
 
 
 class TestAnthropicOAuthFlag:

@@ -4912,10 +4912,20 @@ def resolve_provider_client(
     if provider == "minimax-oauth":
         try:
             from hermes_cli.auth import AuthError, resolve_minimax_oauth_runtime_credentials
+        except ImportError as exc:
+            logger.warning(
+                "Auxiliary MiniMax OAuth support is unavailable in this install: %s",
+                exc,
+            )
+            return None, None
 
+        try:
             creds = resolve_minimax_oauth_runtime_credentials(as_token_provider=True)
-        except (AuthError, ImportError) as exc:
-            logger.debug("Auxiliary minimax-oauth: %s", exc)
+        except AuthError as exc:
+            logger.warning(
+                "Auxiliary MiniMax OAuth is not logged in: %s",
+                exc,
+            )
             return None, None
 
         token_provider = creds.get("api_key")

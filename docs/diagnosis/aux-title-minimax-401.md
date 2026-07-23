@@ -2,10 +2,11 @@
 
 ## Symptom
 
-When `minimax-oauth` is selected for an auxiliary task or a MoA reference,
-`resolve_provider_client()` returns `(None, None)` and the request may fall
-through to another provider or surface a misleading missing-API-key error.
-The main MiniMax OAuth conversation path remains functional.
+Before this fix, selecting `minimax-oauth` for an auxiliary task or a MoA
+reference made `resolve_provider_client()` return `(None, None)`. The request
+could then fall through to another provider or surface a misleading
+missing-API-key error even though the main MiniMax OAuth conversation path
+remained functional.
 
 ## Root cause
 
