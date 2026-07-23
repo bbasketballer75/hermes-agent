@@ -607,6 +607,26 @@ class TestResolveXaiOAuthForAux:
 class TestResolveMiniMaxOAuthForAux:
     """MiniMax OAuth must use its refreshable PKCE state in auxiliary paths."""
 
+    def test_defaults_to_m3_when_no_task_model_is_configured(self):
+        from agent.auxiliary_client import resolve_provider_client
+
+        token_provider = MagicMock(name="minimax_token_provider")
+        with (
+            patch(
+                "hermes_cli.auth.resolve_minimax_oauth_runtime_credentials",
+                return_value={
+                    "provider": "minimax-oauth",
+                    "api_key": token_provider,
+                    "base_url": "https://api.minimax.io/anthropic",
+                    "source": "oauth",
+                },
+            ),
+            patch("agent.anthropic_adapter.build_anthropic_client"),
+        ):
+            _client, model = resolve_provider_client("minimax-oauth")
+
+        assert model == "MiniMax-M3"
+
     def test_builds_refreshable_anthropic_client(self):
         from agent.auxiliary_client import AnthropicAuxiliaryClient, resolve_provider_client
 

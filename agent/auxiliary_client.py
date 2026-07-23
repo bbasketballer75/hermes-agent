@@ -4937,7 +4937,7 @@ def resolve_provider_client(
             return None, None
 
         final_model = _normalize_resolved_model(
-            model or _get_aux_model_for_provider(provider) or "MiniMax-M2.7",
+            model or _get_aux_model_for_provider(provider) or "MiniMax-M3",
             provider,
         )
         try:

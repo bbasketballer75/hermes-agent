@@ -1183,6 +1183,7 @@ def init_agent(
                     # config — some providers use non-standard names
                     # (e.g. alibaba → DASHSCOPE_API_KEY, not ALIBABA_API_KEY).
                     _env_hint = f"{_explicit.upper()}_API_KEY"
+                    _pcfg = None
                     try:
                         from hermes_cli.auth import PROVIDER_REGISTRY
                         _pcfg = PROVIDER_REGISTRY.get(_explicit)
@@ -1231,11 +1232,19 @@ def init_agent(
                             _fb_resolved = True
                             break
                     if not _fb_resolved:
-                        raise RuntimeError(
-                            f"Provider '{_explicit}' is set in config.yaml but no API key "
-                            f"was found. Set the {_env_hint} environment "
-                            f"variable, or switch to a different provider with `hermes model`."
-                        )
+                        _auth_type = str(getattr(_pcfg, "auth_type", "") or "")
+                        if _auth_type.startswith("oauth"):
+                            raise RuntimeError(
+                                f"Provider '{_explicit}' is set in config.yaml but no "
+                                "OAuth login was found. Run `hermes model` to sign in, "
+                                "or switch to a different provider."
+                            )
+                        else:
+                            raise RuntimeError(
+                                f"Provider '{_explicit}' is set in config.yaml but no API key "
+                                f"was found. Set the {_env_hint} environment "
+                                f"variable, or switch to a different provider with `hermes model`."
+                            )
                 if not getattr(agent, "_fallback_activated", False):
                     # No provider configured — reject with a clear message.
                     raise RuntimeError(

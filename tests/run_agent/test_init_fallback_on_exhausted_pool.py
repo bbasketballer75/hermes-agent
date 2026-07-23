@@ -67,3 +67,28 @@ def test_init_raises_when_no_fallback_configured():
                 skip_memory=True,
                 fallback_model=None,
             )
+
+
+def test_init_uses_oauth_login_guidance_without_fake_api_key():
+    """OAuth providers should direct users to login, not invent an env key."""
+    with patch("agent.auxiliary_client.resolve_provider_client", return_value=(None, None)), \
+         patch("run_agent.get_tool_definitions", return_value=_make_tool_defs()), \
+         patch("run_agent.check_toolset_requirements", return_value={}), \
+         patch("run_agent.OpenAI", return_value=MagicMock()):
+
+        with pytest.raises(RuntimeError) as exc_info:
+            AIAgent(
+                provider="minimax-oauth",
+                model="MiniMax-M3",
+                api_key=None,
+                base_url=None,
+                quiet_mode=True,
+                skip_context_files=True,
+                skip_memory=True,
+                fallback_model=None,
+            )
+
+    message = str(exc_info.value)
+    assert "no OAuth login was found" in message
+    assert "hermes model" in message
+    assert "MINIMAX-OAUTH_API_KEY" not in message

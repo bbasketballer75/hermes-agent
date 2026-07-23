@@ -57,13 +57,9 @@ class TestMinimaxAuxModelM3:
         [
             ("minimax", "MiniMax-M3"),
             ("minimax-cn", "MiniMax-M3"),
-            # minimax-oauth sticks with M2.7: the OAuth / Coding Plan
-            # tier historically used -highspeed (PR #6082 collapsed that
-            # to plain M2.7 to avoid the 2x TPS surcharge). M3 is not on
-            # the OAuth/Coding Plan tier per platform docs as of this PR,
-            # so the safe choice is the cheapest generally-available
-            # M2.7 — matching PR #6082's intent.
-            ("minimax-oauth", "MiniMax-M2.7"),
+            # OAuth uses the same global Anthropic endpoint, where M3 is
+            # available and is the only MiniMax model with image/video input.
+            ("minimax-oauth", "MiniMax-M3"),
         ],
     )
     def test_profile_advertises_expected_aux_model(
