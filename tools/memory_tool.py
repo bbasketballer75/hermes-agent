@@ -185,12 +185,11 @@ class MemoryStore:
 
         Called from add() right before the cap-rejection return. The caller
         (add) re-measures after this returns, so we only return True if the
-        compress script ran successfully. We do NOT compare to the cap here:
-        the cap differs per target (memory vs user) and per config, and the
-        caller is the right place to make that judgment under the file lock.
+        compress script ran successfully. The cap comparison is done by the
+        caller (add) under the file lock, not here.
 
         Returns True if the compress script ran (returncode 0) and the file
-        is now smaller than before. Returns False if the script is missing,
+        was reloaded successfully. Returns False if the script is missing,
         returned nonzero, timed out, or raised OSError. Designed to be cheap
         and safe to call on every overflow — caps at `timeout` seconds.
         """
@@ -199,7 +198,6 @@ class MemoryStore:
         if not script.exists():
             return False
         try:
-            before = self._char_count(target)
             r = subprocess.run(
                 [sys.executable, str(script)],
                 capture_output=True, text=True, timeout=timeout,
@@ -207,13 +205,16 @@ class MemoryStore:
             if r.returncode != 0:
                 log.debug("memory auto-consolidate: script returned %d", r.returncode)
                 return False
-            # Return True if the script actually shrank the file. The caller
-            # (add) re-measures against the per-target cap and decides if
-            # the add can proceed.
-            return self._char_count(target) < before
+            # Reload the cache so the disk state is reflected in _entries.
+            # Without this, _char_count() returns the cached entry list
+            # (which we just loaded pre-consolidate) and the add() flow
+            # will think consolidation did nothing.
+            self._reload_target(target, skip_drift=True)
+            return True
         except (subprocess.TimeoutExpired, OSError) as e:
             log.debug("memory auto-consolidate failed: %s", e)
             return False
+
 
     def load_from_disk(self):
         """Load entries from MEMORY.md and USER.md, capture system prompt snapshot.

@@ -927,7 +927,17 @@ class TestLoadTimeSnapshotSanitization:
         rewrites the file to be smaller (simulating real compress behavior).
         """
         import subprocess
+        # _auto_consolidate() uses BOTH get_memory_dir() (for MEMORY.md/USER.md)
+        # AND get_hermes_home() (for the script path at <hermes_home>/scripts/).
+        # Redirect both to the same tmp_path so the test is self-contained.
         monkeypatch.setattr("tools.memory_tool.get_memory_dir", lambda: tmp_path)
+        monkeypatch.setattr("tools.memory_tool.get_hermes_home", lambda: tmp_path)
+        # _auto_consolidate() requires the compress script to exist at
+        # <hermes_home>/scripts/memory-auto-compress.py — create a stub.
+        (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "scripts" / "memory-auto-compress.py").write_text(
+            "# stub for test\n", encoding="utf-8"
+        )
         # Cap is 2200 by default. Fill MEMORY.md to ~1900 chars, then add an
         # entry of 600 chars so new_total = 1900 + 600 + len(ENTRY_DELIMITER)
         # > 2200, forcing the cap-check to fire. Auto-consolidate is then
@@ -939,15 +949,12 @@ class TestLoadTimeSnapshotSanitization:
         assert s._char_count("memory") > 1800
 
         compress_calls = []
-        def fake_compress():
+        def fake_run(*args, **kwargs):
             compress_calls.append(1)
             # Shrink the file: overwrite with a single small entry
             (tmp_path / "MEMORY.md").write_text("§\nshrunken\n", encoding="utf-8")
             r = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
             return r
-
-        def fake_run(*args, **kwargs):
-            return fake_compress()
         monkeypatch.setattr("tools.memory_tool.subprocess.run", fake_run)
 
         # 600 chars + delimiter, pushes new_total well past cap
