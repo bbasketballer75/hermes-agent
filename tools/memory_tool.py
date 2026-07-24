@@ -26,14 +26,19 @@ Design:
 import json
 import logging
 import os
+import subprocess
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from hermes_constants import get_hermes_home
 from typing import Dict, Any, List, Optional
-
 from utils import atomic_replace
+from tools.threat_patterns import first_threat_message as _first_threat_message
+from tools.registry import registry, tool_error
+
+log = logging.getLogger(__name__)
 
 # fcntl is Unix-only; on Windows use msvcrt for file locking
 msvcrt = None
@@ -174,6 +179,35 @@ class MemoryStore:
                 "in a later turn."
             ),
         }
+
+    def _auto_consolidate(self, target: str, timeout: int = 5) -> bool:
+        """Shell out to memory-auto-compress.py to free up space in `target`.
+
+        Called from add() right before the cap-rejection return. If the
+        compress script runs successfully and removes enough bytes, the
+        caller re-measures and the add() proceeds.
+
+        Returns True on success (file is now smaller), False otherwise.
+        Designed to be cheap and safe to call on every overflow — caps at
+        `timeout` seconds, swallows non-zero exits, logs to memory.log.
+        """
+        from hermes_constants import get_hermes_home
+        hermes_home = get_hermes_home()
+        script = hermes_home / "scripts" / "memory-auto-compress.py"
+        if not script.exists():
+            return False
+        try:
+            r = subprocess.run(
+                [sys.executable, str(script)],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if r.returncode == 0:
+                # Re-measure; caller will check whether it freed enough
+                return self._char_count(target) < int(os.environ.get("HERMES_MEMORY_LIMIT", "6000"))
+            return False
+        except (subprocess.TimeoutExpired, OSError) as e:
+            log.debug("memory auto-consolidate failed: %s", e)
+            return False
 
     def load_from_disk(self):
         """Load entries from MEMORY.md and USER.md, capture system prompt snapshot.
@@ -375,6 +409,24 @@ class MemoryStore:
             new_total = len(ENTRY_DELIMITER.join(new_entries))
 
             if new_total > limit:
+                # Write-time auto-consolidate: try to free up space by running
+                # the same compress script the weekly cron uses, before we
+                # reject. This is the proper fix for "memory full" — the cron
+                # alone is reactive, this is proactive. (skill:
+                # hermes-memory-self-management, fix: write-time auto-consolidate)
+                if self._auto_consolidate(target):
+                    # Re-measure under the same lock
+                    self._reload_target(target, skip_drift=True)
+                    entries = self._entries_for(target)
+                    new_entries = entries + [content]
+                    new_total = len(ENTRY_DELIMITER.join(new_entries))
+                    if new_total <= limit:
+                        entries.append(content)
+                        self._set_entries(target, entries)
+                        self.save_to_disk(target)
+                        return self._success_response(
+                            target, "Entry added (auto-consolidated to make room)."
+                        )
                 current = self._char_count(target)
                 return self._consolidation_failure({
                     "success": False,
