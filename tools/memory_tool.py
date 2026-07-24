@@ -36,7 +36,10 @@ from hermes_constants import get_hermes_home
 from typing import Dict, Any, List, Optional
 from utils import atomic_replace
 from tools.threat_patterns import first_threat_message as _first_threat_message
-from tools.registry import registry, tool_error
+# Note: `from tools.registry import registry, tool_error` is duplicated
+# at the bottom of the file under "# --- Registry ---" (intentional for
+# module-load ordering). Keep the bottom one; remove the redundant top
+# import to avoid two import sites for the same module.
 
 log = logging.getLogger(__name__)
 
@@ -86,9 +89,6 @@ ENTRY_DELIMITER = "\n§\n"
 #    entry persists for the entire session and across sessions until
 #    explicitly removed.
 # ---------------------------------------------------------------------------
-
-from tools.threat_patterns import first_threat_message as _first_threat_message
-
 
 def _scan_memory_content(content: str) -> Optional[str]:
     """Scan memory content for injection/exfil patterns. Returns error string if blocked."""
@@ -183,28 +183,34 @@ class MemoryStore:
     def _auto_consolidate(self, target: str, timeout: int = 5) -> bool:
         """Shell out to memory-auto-compress.py to free up space in `target`.
 
-        Called from add() right before the cap-rejection return. If the
-        compress script runs successfully and removes enough bytes, the
-        caller re-measures and the add() proceeds.
+        Called from add() right before the cap-rejection return. The caller
+        (add) re-measures after this returns, so we only return True if the
+        compress script ran successfully. We do NOT compare to the cap here:
+        the cap differs per target (memory vs user) and per config, and the
+        caller is the right place to make that judgment under the file lock.
 
-        Returns True on success (file is now smaller), False otherwise.
-        Designed to be cheap and safe to call on every overflow — caps at
-        `timeout` seconds, swallows non-zero exits, logs to memory.log.
+        Returns True if the compress script ran (returncode 0) and the file
+        is now smaller than before. Returns False if the script is missing,
+        returned nonzero, timed out, or raised OSError. Designed to be cheap
+        and safe to call on every overflow — caps at `timeout` seconds.
         """
-        from hermes_constants import get_hermes_home
         hermes_home = get_hermes_home()
         script = hermes_home / "scripts" / "memory-auto-compress.py"
         if not script.exists():
             return False
         try:
+            before = self._char_count(target)
             r = subprocess.run(
                 [sys.executable, str(script)],
                 capture_output=True, text=True, timeout=timeout,
             )
-            if r.returncode == 0:
-                # Re-measure; caller will check whether it freed enough
-                return self._char_count(target) < int(os.environ.get("HERMES_MEMORY_LIMIT", "6000"))
-            return False
+            if r.returncode != 0:
+                log.debug("memory auto-consolidate: script returned %d", r.returncode)
+                return False
+            # Return True if the script actually shrank the file. The caller
+            # (add) re-measures against the per-target cap and decides if
+            # the add can proceed.
+            return self._char_count(target) < before
         except (subprocess.TimeoutExpired, OSError) as e:
             log.debug("memory auto-consolidate failed: %s", e)
             return False
