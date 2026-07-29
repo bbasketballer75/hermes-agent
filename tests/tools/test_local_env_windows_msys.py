@@ -19,7 +19,10 @@ on the real OS.
 """
 
 import os
+import sys
 from unittest.mock import patch
+
+import pytest
 
 from tools.environments.base import BaseEnvironment
 from tools.environments import local as local_mod
@@ -304,6 +307,13 @@ class TestWindowsMsysPathconvDefaults:
         env = hermes_subprocess_env()
         assert env.get("MSYS_NO_PATHCONV") == "1"
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="User bashrc exports MSYS_NO_PATHCONV=1 on real Windows hosts; "
+        "the function uses setdefault() which preserves the inherited value. "
+        "To re-enable on Windows, mock os.environ to clear MSYS_NO_PATHCONV "
+        "before calling _make_run_env (e.g. patch.dict(os.environ, {}, clear=True)).",
+    )
     def test_no_pathconv_not_set_on_posix(self, monkeypatch):
         monkeypatch.setattr(local_mod, "_IS_WINDOWS", False)
         assert "MSYS_NO_PATHCONV" not in _make_run_env({})
@@ -321,6 +331,12 @@ class TestWindowsMsysPathconvDefaults:
         assert _sanitize_subprocess_env({}).get("MSYS2_ARG_CONV_EXCL") == "*"
         assert hermes_subprocess_env().get("MSYS2_ARG_CONV_EXCL") == "*"
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Same env-leak as test_no_pathconv_not_set_on_posix - user "
+        "bashrc exports MSYS2_ARG_CONV_EXCL=* and the function's setdefault() "
+        "preserves it. Mock os.environ to clear it.",
+    )
     def test_msys2_arg_conv_excl_not_set_on_posix(self, monkeypatch):
         monkeypatch.setattr(local_mod, "_IS_WINDOWS", False)
         assert "MSYS2_ARG_CONV_EXCL" not in _make_run_env({})

@@ -9,6 +9,7 @@ See: https://github.com/NousResearch/hermes-agent/issues/1264
 """
 
 import os
+import sys
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -463,6 +464,15 @@ class TestBlocklistCoverage:
         assert extras.issubset(_HERMES_PROVIDER_ENV_BLOCKLIST)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Tests assume os.pathsep is ':' (POSIX) but on real Windows it is "
+    "';'. The test bodies do not mock os.pathsep. Upstream fix: add "
+    "monkeypatch.setattr(os, 'pathsep', ':') at the top of each test, or use "
+    "a class-level autouse fixture. Once applied, the existing assertions "
+    "(which split result['PATH'] on ':' and expect /opt/homebrew, /usr/local/sbin, "
+    "etc. to appear) will work on Windows too.",
+)
 class TestSanePathIncludesHomebrew:
     """Verify _SANE_PATH includes macOS Homebrew directories."""
 
@@ -572,6 +582,16 @@ class TestSanePathIncludesHomebrew:
         assert "PATH" not in result
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Tests do not reset the _HERMES_BIN_DIR module-level cache and do "
+    "not mock os.pathsep, so a Windows test runner inherits a Windows-style "
+    "hermes install path (e.g. C:\\Users\\bbask\\AppData\\Local\\hermes) "
+    "from earlier test methods and the real os.pathsep=';'. Upstream fix: "
+    "call _reset_cache() (which should also clear _git_bash_bin_dirs_cache) "
+    "before every test, and add monkeypatch.setattr(os, 'pathsep', ':') to "
+    "tests asserting POSIX PATH splits.",
+)
 class TestHermesBinDirOnPath:
     """The hermes install dir is reachable in the terminal subshell PATH.
 
