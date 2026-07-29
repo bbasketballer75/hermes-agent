@@ -598,6 +598,23 @@ class _Runtime:
                 output=fields,
                 metadata=self._event_metadata(),
             )
+        except RuntimeError as exc:
+            # _native_pop_scope raises "scope handle is not at the top of
+            # the stack" when the task scope was already popped by a
+            # concurrent error-cleanup path (commonly seen after a tool
+            # executor timeout). Treat as recoverable: the scope is gone,
+            # which is the outcome we wanted. Log at warning (not error).
+            if "scope handle is not at the top" in str(exc):
+                logger.warning(
+                    "Hermes shared-metrics task handle already absent at "
+                    "pop (task_id=%s); treating as recoverable — possible "
+                    "double-pop from a concurrent error-cleanup path",
+                    task_id,
+                )
+            else:
+                logger.warning(
+                    "Hermes shared-metrics task close failed", exc_info=True
+                )
         except Exception:
             logger.warning("Hermes shared-metrics task close failed", exc_info=True)
         finally:

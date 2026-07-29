@@ -473,6 +473,11 @@ class RelayTurnContext:
     turn_id: str
     task_id: str
     handle: Any = None
+    # Native scope-stack depth captured at begin_turn push time. end_turn
+    # asserts the depth is unchanged before popping; drift is logged as a
+    # warning (not an error) so a single anomalous tool/LLM cleanup path
+    # cannot cascade into a turn-finalization failure.
+    scope_depth_at_push: int | None = field(default=None, repr=False)
     logical_llm_calls: dict[str, Any] = field(default_factory=dict, repr=False)
     logical_llm_lock: threading.RLock = field(
         default_factory=threading.RLock,
@@ -602,6 +607,19 @@ class RelaySessionCoordinator:
         turn = RelayTurnContext(lease=lease, turn_id=turn_id, task_id=task_id)
         if isinstance(lease.host, RelayRuntime) and lease.session is not None:
             try:
+                # Capture native scope-stack depth before pushing so end_turn
+                # can detect drift (e.g. an extra pop from an error-cleanup
+                # path) and log it without cascading into a finalization
+                # failure. _ensure_scope_stack is idempotent — safe to call
+                # outside run_in_session.
+                try:
+                    from nemo_relay._context import ensure_scope_stack
+                    ensure_scope_stack()
+                except Exception:
+                    pass
+                turn.scope_depth_at_push = len(
+                    lease.host.relay.get_scope_stack()
+                )
                 turn.handle = lease.host.run_in_session(
                     lease.session,
                     lease.host.relay.scope.push,
@@ -640,6 +658,35 @@ class RelaySessionCoordinator:
                 if isinstance(lease.host, RelayRuntime) and lease.session is not None:
                     self._finish_logical_calls(turn, outcome=outcome)
                     if turn.handle is not None:
+                        # Drift detection: if the native scope stack depth
+                        # has changed since begin_turn pushed the turn
+                        # handle, some other code path (typically a
+                        # tool/LLM error-cleanup path) pushed or popped
+                        # outside the expected LIFO order. Log a warning
+                        # and proceed — the pop below will catch the
+                        # "already popped" case via its own exception.
+                        try:
+                            current_depth = len(
+                                lease.host.relay.get_scope_stack()
+                            )
+                            if (
+                                turn.scope_depth_at_push is not None
+                                and current_depth != turn.scope_depth_at_push
+                            ):
+                                logger.warning(
+                                    "Hermes Relay scope stack drifted during turn "
+                                    "(session=%s turn_id=%s push_depth=%s "
+                                    "current_depth=%s) — pop may fail; "
+                                    "treating as recoverable",
+                                    lease.session_id,
+                                    turn.turn_id,
+                                    turn.scope_depth_at_push,
+                                    current_depth,
+                                )
+                        except Exception:
+                            # Never let drift detection mask the real
+                            # finalization outcome.
+                            pass
                         try:
                             lease.host.run_in_session(
                                 lease.session,
@@ -651,9 +698,35 @@ class RelaySessionCoordinator:
                                     RUNTIME_INSTANCE_KEY: lease.host.runtime_id,
                                 },
                             )
+                        except RuntimeError as exc:
+                            # _native_pop_scope raises "scope handle is not
+                            # at the top of the stack" when the handle has
+                            # already been popped (double-pop from a
+                            # concurrent error-cleanup path) or has been
+                            # buried by another push. Both cases mean the
+                            # scope is no longer the top — which is the
+                            # outcome the caller wanted anyway. Log at
+                            # warning (not error) so a single anomaly
+                            # cannot cascade into a turn-finalization
+                            # failure.
+                            if "scope handle is not at the top" in str(exc):
+                                logger.warning(
+                                    "Hermes Relay turn handle already absent at "
+                                    "pop (session=%s turn_id=%s); treating as "
+                                    "recoverable — possible double-pop from a "
+                                    "concurrent error-cleanup path",
+                                    lease.session_id,
+                                    turn.turn_id,
+                                )
+                            else:
+                                logger.warning(
+                                    "Hermes Relay turn finalization failed",
+                                    exc_info=True,
+                                )
                         except Exception:
                             logger.warning(
-                                "Hermes Relay turn finalization failed", exc_info=True
+                                "Hermes Relay turn finalization failed",
+                                exc_info=True,
                             )
             finally:
                 try:
