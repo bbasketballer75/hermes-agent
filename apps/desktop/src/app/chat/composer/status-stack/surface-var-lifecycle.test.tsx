@@ -1,5 +1,5 @@
 import { act, cleanup, render } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { STATUS_STACK_VAR } from '@/app/chat/surface-vars'
