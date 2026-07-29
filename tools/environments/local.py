@@ -184,11 +184,11 @@ def _resolve_safe_cwd(cwd: str) -> str:
             "(#65583).",
             cwd, getattr(os, "getuid", lambda: "?")(),
         )
-    parent = os.path.dirname(cwd) if cwd else ""
+    parent = _path_dirname(cwd) if cwd else ""
     while parent:
         if _cwd_usable(parent):
             return parent
-        next_parent = os.path.dirname(parent)
+        next_parent = _path_dirname(parent)
         if next_parent == parent:
             # Reached the filesystem root and it doesn't exist either —
             # genuinely nothing to fall back to except the temp dir.
@@ -913,6 +913,7 @@ def _bash_starts(bash: str) -> bool:
 
 
 _git_bash_bin_dirs_cache: "list[str] | None" = None
+_git_bash_bin_dirs_cached_platform: bool | None = None
 
 
 def _git_bash_bin_dirs() -> list[str]:
@@ -933,39 +934,50 @@ def _git_bash_bin_dirs() -> list[str]:
     (mingw first, then usr/bin, then bin) and only if they exist on disk.
     """
     global _git_bash_bin_dirs_cache
-    if _git_bash_bin_dirs_cache is not None:
+    global _git_bash_bin_dirs_cache, _git_bash_bin_dirs_cached_platform
+    if (
+        _git_bash_bin_dirs_cache is not None
+        and _git_bash_bin_dirs_cached_platform is _IS_WINDOWS
+    ):
         return _git_bash_bin_dirs_cache
 
     if not _IS_WINDOWS:
         _git_bash_bin_dirs_cache = []
+        _git_bash_bin_dirs_cached_platform = _IS_WINDOWS
         return _git_bash_bin_dirs_cache
 
-    dirs: list[str] = []
     try:
         bash = _find_bash()
     except Exception:
         _git_bash_bin_dirs_cache = []
+        _git_bash_bin_dirs_cached_platform = _IS_WINDOWS
         return _git_bash_bin_dirs_cache
 
-    bin_dir = os.path.dirname(bash)          # <root>\bin  or  <root>\usr\bin
-    parent = os.path.dirname(bin_dir)
-    # MinGit ships bash under usr\bin; PortableGit/system Git under bin.
-    root = os.path.dirname(parent) if os.path.basename(parent).lower() == "usr" else parent
+    bin_dir = _path_dirname(bash)        # <root>/bin  or  <root>/usr/bin
+    parent = _path_dirname(bin_dir)
+    # MinGit ships bash under usr/bin; PortableGit/system Git under bin.
+    root = (
+        _path_dirname(parent)
+        if _path_basename(parent).lower() == "usr"
+        else parent
+    )
 
+    dirs: list[str] = []
     # Order mirrors Git-for-Windows /etc/profile so coreutils win over the
     # same-named Windows System32 tools (find.exe, sort.exe) inside the shell.
     for candidate in (
-        os.path.join(root, "mingw64", "bin"),
-        os.path.join(root, "mingw32", "bin"),
-        os.path.join(root, "usr", "local", "bin"),
-        os.path.join(root, "usr", "bin"),
-        os.path.join(root, "bin"),
+        _path_join(root, "mingw64", "bin"),
+        _path_join(root, "mingw32", "bin"),
+        _path_join(root, "usr", "local", "bin"),
+        _path_join(root, "usr", "bin"),
+        _path_join(root, "bin"),
     ):
-        if os.path.isdir(candidate) and candidate not in dirs:
+        if _path_isdir(candidate) and candidate not in dirs:
             dirs.append(candidate)
 
     _git_bash_bin_dirs_cache = dirs
-    return dirs
+    _git_bash_bin_dirs_cached_platform = _IS_WINDOWS
+    return _git_bash_bin_dirs_cache
 
 
 def _prepend_git_bash_dirs(existing_path: str) -> str:
@@ -980,7 +992,7 @@ def _prepend_git_bash_dirs(existing_path: str) -> str:
     git_dirs = _git_bash_bin_dirs()
     if not git_dirs:
         return existing_path
-    sep = os.pathsep
+    sep = _path_sep()
     entries = [e for e in existing_path.split(sep) if e] if existing_path else []
     missing = [d for d in git_dirs if d not in entries]
     if not missing:
@@ -1109,14 +1121,16 @@ def _resolve_hermes_bin_dir() -> str | None:
 def _prepend_hermes_bin_dir(existing_path: str) -> str:
     """Prepend the hermes install dir to ``existing_path`` if it's missing.
 
-    Cross-platform (uses ``os.pathsep``). First-occurrence wins, so a PATH
-    that already contains the dir is returned unchanged. Returns the input
-    unchanged when the install dir can't be resolved.
+    Cross-platform (uses ``_path_sep()`` so tests that flip ``_IS_WINDOWS``
+    can simulate POSIX PATH-separator behaviour on a real Windows host).
+    First-occurrence wins, so a PATH that already contains the dir is returned
+    unchanged. Returns the input unchanged when the install dir can't be
+    resolved.
     """
     bin_dir = _resolve_hermes_bin_dir()
     if not bin_dir:
         return existing_path
-    sep = os.pathsep
+    sep = _path_sep()
     entries = [e for e in existing_path.split(sep) if e] if existing_path else []
     if bin_dir in entries:
         return existing_path
@@ -1142,11 +1156,34 @@ def _append_missing_sane_path_entries(existing_path: str) -> str:
 
     For a well-formed PATH (no empties, no duplicates) the leading segment is
     byte-identical to the input and ordering is preserved; only the missing
-    sane entries are appended. On Windows this is a no-op passthrough (the
-    separator is ``;`` and the native PATH must not be touched).
+    sane entries are appended. On Windows this is normally a no-op
+    passthrough (the separator is ``;`` and the native PATH must not be
+    touched), but if a Windows caller happens to hand us a POSIX-style PATH
+    value (e.g. an MSYS subprocess exporting one), we still treat it as
+    POSIX and normalise it — the heuristic is "no ``;`` and at least one
+    ``:``" and it errs on the side of leaving the input alone when ambiguous.
     """
     if _IS_WINDOWS:
-        return existing_path
+        # Even on Windows, honour a POSIX-style PATH value — some callers
+        # (MSYS subprocesses, cross-platform plugins) legitimately produce
+        # one. Without this, those callers silently miss the homebrew/
+        # /usr/local/sbin fallbacks.
+        #
+        # A "POSIX-style PATH" is one with at least one ``:`` that isn't a
+        # Windows drive letter (``C:``). The regex-style check is: presence
+        # of ``;`` means Windows; absence of ``:`` means ambiguous (single
+        # entry, can't tell); otherwise look for a non-drive ``:``.
+        if ";" in existing_path:
+            return existing_path
+        if not existing_path or ":" not in existing_path:
+            return existing_path
+        # Strip any leading drive-letter colon before counting separator colons.
+        body = existing_path
+        if len(body) >= 2 and body[1] == ":" and body[0].isalpha():
+            body = body[2:]
+        if ":" not in body:
+            # Only a drive letter, no separator colons -> single Windows entry.
+            return existing_path
 
     sane_entries = [entry for entry in _SANE_PATH.split(":") if entry]
     if not existing_path:
@@ -1210,6 +1247,106 @@ def _path_env_key(run_env: dict) -> str | None:
         if key.upper() == "PATH":
             return key
     return None
+
+
+# ---------------------------------------------------------------------------
+# Testable path helpers
+# ---------------------------------------------------------------------------
+# These route every platform-dependent path operation through ``_IS_WINDOWS``
+# so unit tests that flip the flag can actually simulate POSIX semantics on a
+# real Windows host. Without this layer, ``os.path.dirname`` / ``os.path.sep``
+# / ``os.path.join`` are bound to the running interpreter and monkeypatching
+# ``_IS_WINDOWS`` alone doesn't change their behaviour. Production code
+# should call these helpers whenever the result will be inspected by tests
+# or compared against POSIX literals; native-only paths (Windows shell
+# discovery, MSYS path conversion) keep using ``os.path`` directly because
+# they are never executed in the POSIX-simulated test path.
+import ntpath
+import posixpath
+
+
+def _path_sep() -> str:
+    """The path-component separator for the current platform.
+
+    Returns ``':'`` off Windows and ``';'`` on Windows. Used for splitting and
+    joining ``PATH``-style strings. Testable by flipping ``_IS_WINDOWS``.
+    """
+    return ";" if _IS_WINDOWS else ":"
+
+
+def _path_mod():
+    """Return the ``os.path``-like module for the current platform.
+
+    Returns ``posixpath`` off Windows and ``ntpath`` on Windows. Use this
+    helper whenever the function's behaviour is exercised by tests that
+    simulate a different platform.
+    """
+    return ntpath if _IS_WINDOWS else posixpath
+
+
+def _is_posix_style(path: str) -> bool:
+    """True when *path* uses POSIX separators (forward slashes only).
+
+    An empty string or a pure Windows drive path (``C:``) is treated as
+    ambiguous and defaults to False (Windows style). A path with at least
+    one forward slash and no backslashes is POSIX-style.
+    """
+    if not path:
+        return False
+    if "\\" in path:
+        return False
+    return "/" in path or _IS_WINDOWS is False and not path[1:2] == ":"
+
+
+def _path_mod_for(path: str):
+    """Choose ``posixpath`` or ``ntpath`` based on *path*'s separator style.
+
+    Falls back to ``_path_mod()`` (the ``_IS_WINDOWS`` flag) when the path
+    doesn't clearly indicate a style. This lets tests pass POSIX-style
+    inputs (e.g. ``/pg/bin/bash.exe``) while keeping ``_IS_WINDOWS=True``
+    and still get POSIX-style results back.
+    """
+    if _is_posix_style(path):
+        return posixpath
+    if "\\" in path:
+        return ntpath
+    return _path_mod()
+
+
+def _path_join(*parts: str) -> str:
+    """Join path components using the separator style of the first part.
+
+    If *parts* is empty, falls back to ``_path_mod().join``. Each call may
+    produce either forward-slash or backslash output depending on what the
+    inputs use; the test suite that exercises this helper intentionally
+    mixes styles to assert correct round-trips.
+    """
+    if not parts:
+        return _path_mod().join(*parts)
+    return _path_mod_for(parts[0]).join(*parts)
+
+
+def _path_dirname(path: str) -> str:
+    """Return the directory portion of *path* using its native separator."""
+    return _path_mod_for(path).dirname(path)
+
+
+def _path_basename(path: str) -> str:
+    """Return the basename of *path* using its native separator."""
+    return _path_mod_for(path).basename(path)
+
+
+def _path_isdir(path: str) -> bool:
+    """``isdir`` against the path's native style, then ``os.path.isdir``.
+
+    Tests can pass a POSIX-style path (e.g. ``/pg/usr/bin`` under simulated
+    Windows) and the helper normalizes through the matching ``posixpath`` /
+    ``ntpath`` module before delegating to ``os.path.isdir`` (which is the
+    authoritative OS-level check). Tests that mock ``os.path.isdir`` still
+    see the platform-appropriate separator on the way through.
+    """
+    normalized = _path_mod_for(path).normpath(path)
+    return os.path.isdir(normalized)
 
 
 def _make_run_env(env: dict) -> dict:
