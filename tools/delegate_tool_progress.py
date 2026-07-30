@@ -188,9 +188,16 @@ def _resolve_workspace_hint(parent_agent) -> Optional[str]:
     """Best-effort local workspace hint for child prompts: only a concrete
     absolute directory is ever injected (never a fake container path)."""
     from agent.runtime_cwd import scope_terminal_cwd
+    # Parent-specific fields FIRST. TERMINAL_CWD is process-wide state: when
+    # the gateway is launched outside the target project, it holds the
+    # gateway's own directory, and preferring it here would pin the child to
+    # exactly the wrong place this hint exists to avoid. It stays only as the
+    # last-resort fallback when the parent carries no workspace of its own.
     candidates = [
-        scope_terminal_cwd(), getattr(getattr(parent_agent, "_subdirectory_hints", None), "working_dir", None),
-        getattr(parent_agent, "terminal_cwd", None), getattr(parent_agent, "cwd", None),
+        getattr(getattr(parent_agent, "_subdirectory_hints", None), "working_dir", None),
+        getattr(parent_agent, "terminal_cwd", None),
+        getattr(parent_agent, "cwd", None),
+        scope_terminal_cwd(),
     ]
     for candidate in filter(None, candidates):
         with _quiet(None):
@@ -198,6 +205,21 @@ def _resolve_workspace_hint(parent_agent) -> Optional[str]:
             if os.path.isabs(text) and os.path.isdir(text):
                 return text
     return None
+
+
+def _run_child_in_workspace(child, workspace_path: Optional[str], *args, **kwargs):
+    """Run a child with its logical cwd pinned to the parent's workspace."""
+    if not workspace_path:
+        return child.run_conversation(*args, **kwargs)
+    from agent.runtime_cwd import set_session_cwd
+
+    # The Token carries its ContextVar as token.var — reset through it rather
+    # than importing the private _SESSION_CWD module global.
+    token = set_session_cwd(workspace_path)
+    try:
+        return child.run_conversation(*args, **kwargs)
+    finally:
+        token.var.reset(token)
 
 _BATCH_ORDINALS: Dict[str, Dict[str, int]] = {}
 _BATCH_ORDINALS_LOCK = threading.Lock()
