@@ -67,3 +67,71 @@ def test_init_raises_when_no_fallback_configured():
                 skip_memory=True,
                 fallback_model=None,
             )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the "misleading MINIMAX-OAUTH_API_KEY env var" bug.
+# When the auxiliary client can't resolve credentials for an OAuth / device-
+# code / PKCE provider, the error message must NOT point the user at an env
+# var that does not exist (e.g. MINIMAX-OAUTH_API_KEY). It must instead point
+# them at ``hermes model`` to re-authenticate.
+# ---------------------------------------------------------------------------
+
+
+def test_missing_credentials_error_oauth_provider():
+    """OAuth / device-code / PKCE providers must get the 're-authenticate' hint,
+    not a non-existent env var hint."""
+    from agent.auxiliary_client import _missing_credentials_error
+
+    msg = _missing_credentials_error("minimax-oauth")
+    assert "interactive-auth credentials" in msg
+    assert "hermes model" in msg
+    # Critical: must NOT suggest a non-existent env var
+    assert "MINIMAX-OAUTH_API_KEY" not in msg
+    assert "_API_KEY" not in msg
+
+
+def test_missing_credentials_error_device_code_provider():
+    """openai-codex uses device-code auth, not an API key."""
+    from agent.auxiliary_client import _missing_credentials_error
+
+    msg = _missing_credentials_error("openai-codex")
+    assert "interactive-auth credentials" in msg
+    assert "OPENAI-CODEX_API_KEY" not in msg
+
+
+def test_missing_credentials_error_pkce_provider():
+    """anthropic uses PKCE auth, not an API key."""
+    from agent.auxiliary_client import _missing_credentials_error
+
+    msg = _missing_credentials_error("anthropic")
+    assert "interactive-auth credentials" in msg
+    assert "ANTHROPIC_API_KEY" not in msg
+
+
+def test_missing_credentials_error_api_key_provider():
+    """Regular API-key providers still get the 'set X_API_KEY' guidance."""
+    from agent.auxiliary_client import _missing_credentials_error
+
+    msg = _missing_credentials_error("openai")
+    assert "OPENAI_API_KEY" in msg
+    assert "hermes model" in msg
+
+
+def test_missing_credentials_error_case_insensitive():
+    """Provider name matching is case-insensitive and whitespace-trimmed."""
+    from agent.auxiliary_client import _missing_credentials_error
+
+    msg = _missing_credentials_error("  MiniMax-OAuth  ")
+    assert "interactive-auth credentials" in msg
+    assert "MINIMAX-OAUTH_API_KEY" not in msg
+
+
+def test_missing_credentials_error_unknown_provider_falls_through():
+    """Providers not in the interactive-auth set still get the API-key hint,
+    matching the pre-fix behavior for unrecognized names."""
+    from agent.auxiliary_client import _missing_credentials_error
+
+    msg = _missing_credentials_error("some-unknown-provider")
+    assert "SOME-UNKNOWN-PROVIDER_API_KEY" in msg
+    assert "interactive-auth" not in msg
