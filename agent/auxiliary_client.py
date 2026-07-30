@@ -8047,11 +8047,7 @@ def call_llm(
                     client, final_model = fb_client, fb_model
                     resolved_provider = fb_label or resolved_provider
                 else:
-                    raise RuntimeError(
-                        f"Provider '{_explicit}' is set in config.yaml but no API key "
-                        f"was found. Set the {_explicit.upper()}_API_KEY environment "
-                        f"variable, or switch to a different provider with `hermes model`."
-                    )
+                    raise RuntimeError(_missing_credentials_error(_explicit))
             # For auto/custom with no credentials, try the full auto chain
             # rather than hardcoding OpenRouter (which may be depleted).
             # Pass model=None so each provider uses its own default —
@@ -8760,11 +8756,7 @@ async def async_call_llm(
                     )
                     resolved_provider = fb_label or resolved_provider
                 else:
-                    raise RuntimeError(
-                        f"Provider '{_explicit}' is set in config.yaml but no API key "
-                        f"was found. Set the {_explicit.upper()}_API_KEY environment "
-                        f"variable, or switch to a different provider with `hermes model`."
-                    )
+                    raise RuntimeError(_missing_credentials_error(_explicit))
             if client is None and not resolved_base_url:
                 logger.info("Auxiliary %s: provider %s unavailable, trying auto-detection chain",
                             task or "call", resolved_provider)
@@ -9222,3 +9214,42 @@ async def async_call_llm(
                 logger.debug("Auxiliary (async): cache eviction after connection error failed",
                              exc_info=True)
         raise
+
+
+# Providers whose credentials come from interactive auth (OAuth / device-code /
+# PKCE) instead of a static API-key environment variable. For these, telling
+# the user to "set PROVIDER_API_KEY" is misleading — the actual remediation is
+# to re-run ``hermes model`` and complete the interactive flow again.
+_INTERACTIVE_AUTH_PROVIDERS = frozenset({
+    "anthropic",
+    "minimax-oauth",
+    "nous",
+    "openai-codex",
+    "qwen-oauth",
+    "xai-oauth",
+})
+
+
+def _missing_credentials_error(provider: str) -> str:
+    """Provider-aware error message for the "no credentials available" path.
+
+    Static API-key providers get the original "set X_API_KEY" guidance.
+    Interactive-auth providers (OAuth / device-code / PKCE) get an actionable
+    "re-run ``hermes model``" message instead — pointing them at an env var
+    that does not exist (e.g. ``MINIMAX-OAUTH_API_KEY``) was the long-standing
+    source of "Title generation failed: … set the MINIMAX-OAUTH_API_KEY
+    environment variable" misleading warnings for legitimately-logged-in users.
+    """
+    normalized = (provider or "").strip().lower()
+    if normalized in _INTERACTIVE_AUTH_PROVIDERS:
+        return (
+            f"Provider '{normalized}' is set in config.yaml but no valid "
+            f"interactive-auth credentials were found. Run `hermes model` and "
+            f"re-select the provider to re-authenticate, or switch to a "
+            f"different provider with `hermes model`."
+        )
+    return (
+        f"Provider '{normalized}' is set in config.yaml but no API key "
+        f"was found. Set the {normalized.upper()}_API_KEY environment "
+        f"variable, or switch to a different provider with `hermes model`."
+    )
