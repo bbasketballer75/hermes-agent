@@ -4,6 +4,7 @@ import logging
 import ntpath
 import os
 import platform
+import posixpath
 import re
 import shutil
 import signal
@@ -951,19 +952,24 @@ def _git_bash_bin_dirs() -> list[str]:
         _git_bash_bin_dirs_cache = []
         return _git_bash_bin_dirs_cache
 
-    bin_dir = os.path.dirname(bash)          # <root>\bin  or  <root>\usr\bin
-    parent = os.path.dirname(bin_dir)
+    # Tests and MSYS discovery can provide a forward-slash path even while
+    # running on Windows.  Keep that representation when deriving the
+    # sibling directories; ``os.path.join`` would otherwise inject backslashes
+    # into the result and make the fallback PATH inconsistent with Git Bash.
+    path_ops = posixpath if "/" in bash and "\\" not in bash else ntpath
+    bin_dir = path_ops.dirname(bash)          # <root>/bin  or  <root>/usr/bin
+    parent = path_ops.dirname(bin_dir)
     # MinGit ships bash under usr\bin; PortableGit/system Git under bin.
-    root = os.path.dirname(parent) if os.path.basename(parent).lower() == "usr" else parent
+    root = path_ops.dirname(parent) if path_ops.basename(parent).lower() == "usr" else parent
 
     # Order mirrors Git-for-Windows /etc/profile so coreutils win over the
     # same-named Windows System32 tools (find.exe, sort.exe) inside the shell.
     for candidate in (
-        os.path.join(root, "mingw64", "bin"),
-        os.path.join(root, "mingw32", "bin"),
-        os.path.join(root, "usr", "local", "bin"),
-        os.path.join(root, "usr", "bin"),
-        os.path.join(root, "bin"),
+        path_ops.join(root, "mingw64", "bin"),
+        path_ops.join(root, "mingw32", "bin"),
+        path_ops.join(root, "usr", "local", "bin"),
+        path_ops.join(root, "usr", "bin"),
+        path_ops.join(root, "bin"),
     ):
         if os.path.isdir(candidate) and candidate not in dirs:
             dirs.append(candidate)
