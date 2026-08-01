@@ -361,6 +361,8 @@ export interface ClipboardPasteResponse {
   count?: number
   height?: number
   message?: string
+  /** Saved image path; see tui_gateway/methods_prompt.py's clipboard.paste result. */
+  path?: string
   token_estimate?: number
   width?: number
 }
@@ -382,8 +384,11 @@ export interface TerminalResizeResponse {
 // ── Image attach ─────────────────────────────────────────────────────
 
 export interface ImageAttachResponse {
+  attached?: boolean
   height?: number
   name?: string
+  /** Saved image path; see tui_gateway/methods_prompt.py's image.attach result. */
+  path?: string
   remainder?: string
   token_estimate?: number
   width?: number
