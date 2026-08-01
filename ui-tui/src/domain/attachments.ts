@@ -73,20 +73,17 @@ export const expandTokens = (tokens: ComposerToken[]) => {
   return (value: string) => {
     let expandedAny = false
 
-    const expanded = value.replace(
-      new RegExp(`[ \\t]?(?:${PASTE_SNIPPET_RE.source})`, 'g'),
-      match => {
-        const token = byLabel.get(match.trimStart())?.shift()
+    const expanded = value.replace(new RegExp(`[ \\t]?(?:${PASTE_SNIPPET_RE.source})`, 'g'), match => {
+      const token = byLabel.get(match.trimStart())?.shift()
 
-        if (!token) {
-          return match
-        }
+      if (!token) {
+        return match
+      }
 
-        expandedAny = true
+      expandedAny = true
 
-        return token.kind === 'paste' ? match.slice(0, match.length - token.label.length) + token.text : ''
-      },
-    )
+      return token.kind === 'paste' ? match.slice(0, match.length - token.label.length) + token.text : ''
+    })
 
     // Only trim when an expansion actually happened. The trim exists to clean
     // up the gap an image token leaves behind at the start or end of the

@@ -213,9 +213,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
         return null
       }
 
-      const r = await gw
-        .request<ClipboardPasteResponse>('clipboard.paste', { session_id: sid })
-        .catch(() => null)
+      const r = await gw.request<ClipboardPasteResponse>('clipboard.paste', { session_id: sid }).catch(() => null)
 
       if (r?.attached) {
         return attachImageToken(r, value, cursor)
@@ -309,13 +307,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
   )
 
   const handleTextPaste = useCallback(
-    ({
-      bracketed,
-      cursor,
-      hotkey,
-      text,
-      value
-    }: PasteEvent): MaybePromise<ComposerPasteResult | null> => {
+    ({ bracketed, cursor, hotkey, text, value }: PasteEvent): MaybePromise<ComposerPasteResult | null> => {
       if (hotkey) {
         const preferOsc52 = isRemoteShellSession(process.env)
 

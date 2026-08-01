@@ -113,10 +113,7 @@ describe('droppedTokens counts occurrences, not just presence', () => {
   })
 
   it('drops both when every occurrence is deleted', () => {
-    expect(droppedTokens([image(1), image(1)], 'nothing left')).toEqual([
-      image(1),
-      image(1),
-    ])
+    expect(droppedTokens([image(1), image(1)], 'nothing left')).toEqual([image(1), image(1)])
   })
 })
 
