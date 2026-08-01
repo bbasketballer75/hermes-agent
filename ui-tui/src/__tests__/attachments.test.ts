@@ -94,3 +94,52 @@ describe('droppedTokens (deleting the token unattaches the thing)', () => {
     expect(droppedTokens([image(1), image(2)], imageToken(2))).toEqual([image(1)])
   })
 })
+
+describe('droppedTokens counts occurrences, not just presence', () => {
+  it('drops exactly one when one of two identical labels is deleted', () => {
+    // expandTokens explicitly supports repeated identical labels, so the
+    // drop side has to count them too. Set membership sees the label still
+    // present in the text and reports nothing dropped, silently keeping a
+    // token the user removed.
+    const dup = imageToken(1)
+
+    expect(droppedTokens([image(1), image(1)], `a ${dup} b`)).toEqual([image(1)])
+  })
+
+  it('drops none while both occurrences remain', () => {
+    const dup = imageToken(1)
+
+    expect(droppedTokens([image(1), image(1)], `a ${dup} b ${dup}`)).toEqual([])
+  })
+
+  it('drops both when every occurrence is deleted', () => {
+    expect(droppedTokens([image(1), image(1)], 'nothing left')).toEqual([
+      image(1),
+      image(1),
+    ])
+  })
+})
+
+describe('expandTokens only trims when it actually expanded something', () => {
+  it('leaves token-free text byte-identical', () => {
+    // The transcript bubble shows the raw text; trimming here would make the
+    // agent receive something different from what the user sees they sent.
+    const value = '  deliberate leading and trailing space  '
+
+    expect(expandTokens([])(value)).toBe(value)
+  })
+
+  it('preserves a trailing newline in token-free text', () => {
+    expect(expandTokens([])('line one\n')).toBe('line one\n')
+  })
+
+  it('still trims the gap left by an image token', () => {
+    expect(expandTokens([image(1)])(`${imageToken(1)} hello`)).toBe('hello')
+  })
+
+  it('still expands and trims a paste token', () => {
+    const token = paste('[[ Paste 1 ]]', 'PAYLOAD')
+
+    expect(expandTokens([token])(`${token.label} `)).toBe('PAYLOAD')
+  })
+})

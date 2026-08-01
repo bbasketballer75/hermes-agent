@@ -19,11 +19,36 @@ export const imageToken = (index: number) => `[[ Image ${index} ]]`
 export const nextImageIndex = (tokens: ComposerToken[]) =>
   tokens.reduce((max, t) => (t.kind === 'image' ? Math.max(max, t.index) : max), 0) + 1
 
-/** Tokens whose label is no longer anywhere in the composer text. */
+/**
+ * Tokens no longer backed by an occurrence in the composer text.
+ *
+ * Counts occurrences rather than testing set membership: repeated identical
+ * labels are explicitly supported (see `expandTokens`), so deleting one of
+ * three `[[ Image 1 ]]` tokens has to drop exactly one. Set membership would
+ * see the label still present and drop none.
+ *
+ * Surviving tokens are matched to occurrences left to right, mirroring the
+ * `shift()` order `expandTokens` expands in, so the extras dropped here are
+ * the trailing ones.
+ */
 export const droppedTokens = (tokens: ComposerToken[], value: string) => {
-  const live = new Set(value.match(PASTE_SNIPPET_RE) ?? [])
+  const remaining = new Map<string, number>()
 
-  return tokens.filter(t => !live.has(t.label))
+  for (const label of value.match(PASTE_SNIPPET_RE) ?? []) {
+    remaining.set(label, (remaining.get(label) ?? 0) + 1)
+  }
+
+  return tokens.filter(t => {
+    const left = remaining.get(t.label) ?? 0
+
+    if (left === 0) {
+      return true
+    }
+
+    remaining.set(t.label, left - 1)
+
+    return false
+  })
 }
 
 /**
@@ -45,16 +70,29 @@ export const expandTokens = (tokens: ComposerToken[]) => {
     hit ? hit.push(token) : byLabel.set(token.label, [token])
   }
 
-  return (value: string) =>
-    value
-      .replace(new RegExp(`[ \\t]?(?:${PASTE_SNIPPET_RE.source})`, 'g'), match => {
+  return (value: string) => {
+    let expandedAny = false
+
+    const expanded = value.replace(
+      new RegExp(`[ \\t]?(?:${PASTE_SNIPPET_RE.source})`, 'g'),
+      match => {
         const token = byLabel.get(match.trimStart())?.shift()
 
         if (!token) {
           return match
         }
 
+        expandedAny = true
+
         return token.kind === 'paste' ? match.slice(0, match.length - token.label.length) + token.text : ''
-      })
-      .trim()
+      },
+    )
+
+    // Only trim when an expansion actually happened. The trim exists to clean
+    // up the gap an image token leaves behind at the start or end of the
+    // line — applying it unconditionally would silently rewrite token-free
+    // input, so the text the agent receives would differ from the transcript
+    // bubble for anyone who typed deliberate leading or trailing whitespace.
+    return expandedAny ? expanded.trim() : expanded
+  }
 }

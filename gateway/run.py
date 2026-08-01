@@ -262,8 +262,8 @@ def _ensure_windows_gateway_venv_imports() -> None:
     which broke cross-version Python tools (``uvx``, ``uv tool``,
     ``honcho-cli``, ``mcp-server-*``) that inherit cp311 site-packages under
     their own cp313 interpreters and crash with ``ModuleNotFoundError: No
-    module named 'pydantic_core._pydantic_core'``.  Removed in
-    fix/gateway-pythonpath-ambient-leak; any future subprocess can build its
+    module named 'pydantic_core._pydantic_core'``.  Removed in #15; any
+    future subprocess can build its
     own scoped env block via
     ``hermes_cli.gateway_windows._prepend_pythonpath`` like the NSSM service
     wrapper already does.
@@ -310,8 +310,8 @@ def _ensure_windows_gateway_venv_imports() -> None:
         # subprocesses could find hermes-cli, but MCP discovery runs
         # in-process (uses sys.path/site.addsitedir above) and the leak
         # broke cross-version Python tools spawned from chat-session
-        # terminals.  See fix/gateway-pythonpath-ambient-leak for the
-        # full rationale; any future subprocess should pass a scoped env
+        # terminals.  See #15 for the full rationale; any future
+        # subprocess should pass a scoped env
         # block (e.g. ``hermes_cli.gateway_windows._prepend_pythonpath``).
         return
 

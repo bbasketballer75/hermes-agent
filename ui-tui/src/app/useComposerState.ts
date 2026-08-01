@@ -184,7 +184,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
    * of `~/shot.png look at this` keeps the caption).
    */
   const attachImageToken = useCallback(
-    (attached: ImageAttachResponse & { path?: string }, value: string, cursor: number): ComposerPasteResult => {
+    (attached: ImageAttachResponse, value: string, cursor: number): ComposerPasteResult => {
       const index = nextImageIndex(tokensRef.current)
       const label = imageToken(index)
 
@@ -214,7 +214,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
       }
 
       const r = await gw
-        .request<ClipboardPasteResponse & { path?: string }>('clipboard.paste', { session_id: sid })
+        .request<ClipboardPasteResponse>('clipboard.paste', { session_id: sid })
         .catch(() => null)
 
       if (r?.attached) {
@@ -382,7 +382,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
         }
 
         const attached = await gw
-          .request<ImageAttachResponse & { path?: string }>('image.attach', { path, session_id: sid })
+          .request<ImageAttachResponse>('image.attach', { path, session_id: sid })
           .catch((e: Error) => {
             sys(`error: ${e.message}`)
 
