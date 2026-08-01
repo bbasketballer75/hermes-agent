@@ -42,13 +42,14 @@
 #   - weekly cron on Monday 06:00 UTC (picks up new advisories against
 #     unchanged code)
 #
-# Minutes cost (rough, depends on repo size):
-#   - per-PR: ~3-6 min per language, 5 languages, so budget ~15-30 min
-#     of runner time per pull request. If dependabot volume makes that
-#     expensive, narrowing the PR matrix to python + javascript-typescript
-#     is the first thing to trim -- rust/c-cpp/actions rarely change.
-#   - per-push: ~3-6 min
-#   - weekly scheduled: ~3-6 min
+# Minutes cost -- MEASURED on PR #24, not estimated:
+#     actions 47s | c-cpp 51s | javascript-typescript 1m43s
+#     python 2m9s | rust 1m56s        => ~7.5 min total runner time
+#   The five languages run as parallel matrix jobs, so wall-clock is
+#   ~2 min (the slowest leg), well inside the Python test slices at
+#   ~3-4 min each. CodeQL is not the critical path on this repo and
+#   there is no cost argument for trimming the PR matrix. Re-measure
+#   before assuming otherwise.
 # Branch protections: the per-push block can be skipped on a docs-only
 # change via `[skip ci]` in the commit message.
 
