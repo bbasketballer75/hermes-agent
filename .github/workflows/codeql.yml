@@ -6,11 +6,16 @@
 #     is FP-heavy on a single-maintainer Python codebase (e.g. it
 #     flags standard library trust-boundary patterns the project
 #     explicitly relies on).
-#   - languages: python + javascript (the two source ecosystems on this
-#     side; TypeScript is bundled into the JS analysis per CodeQL docs).
-#     We do not analyze GitHub Actions workflows — actions are pinned
-#     to full commit SHAs, and supply-chain-audit.yml already covers
-#     that surface.
+#   - languages: python, javascript (TypeScript is bundled into the JS
+#     analysis per CodeQL docs), actions, rust, and c-cpp.
+#     rust covers apps/bootstrap-installer/src-tauri; c-cpp covers the
+#     SQLite FTS5 extension in native/fts5_cjk (its vendored amalgamation
+#     is excluded via .github/codeql/codeql-config.yml so third-party
+#     SQLite source doesn't drown the real findings).
+#     actions is analyzed rather than delegated to supply-chain-audit.yml:
+#     SHA pinning does not address `${{ }}` expression injection or
+#     `run:` script issues, and that workflow explicitly dropped the
+#     workflow-edit / action-unpinning heuristics.
 #
 # Triggers:
 #   - push to main (PR-critical findings)
@@ -21,7 +26,7 @@
 #   - per-push: ~3-6 min
 #   - weekly scheduled: ~3-6 min
 # Branch protections: the per-push block can be skipped on a docs-only
-# change via `[skip ci]` or `[codeql skip]` in the commit message.
+# change via `[skip ci]` in the commit message.
 
 name: "CodeQL"
 
@@ -49,6 +54,12 @@ jobs:
             build-mode: none
           - language: javascript-typescript
             build-mode: none
+          - language: actions
+            build-mode: none
+          - language: rust
+            build-mode: none
+          - language: c-cpp
+            build-mode: none
 
     steps:
       - name: Checkout repository
@@ -62,6 +73,7 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
