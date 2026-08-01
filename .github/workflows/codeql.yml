@@ -1,11 +1,23 @@
 # CodeQL security analysis for hermes-agent.
 #
 # Scope:
-#   - queries: security-extended (CVE-class findings only).
-#     We do NOT enable security-and-quality because the "quality" set
-#     is FP-heavy on a single-maintainer Python codebase (e.g. it
-#     flags standard library trust-boundary patterns the project
-#     explicitly relies on).
+#   - queries: the CodeQL DEFAULT suite. We deliberately do not enable
+#     security-extended or security-and-quality.
+#
+#     This workflow previously set security-extended on the theory that
+#     it stayed "CVE-class". Measured on this repo, that was wrong: it
+#     added 266 alerts in one scan, entirely in precision-medium
+#     heuristic families -- py/log-injection (161),
+#     py/shell-command-constructed-from-input (30),
+#     py/overly-permissive-file (25), js/insecure-temporary-file (14),
+#     js/log-injection (13), js/file-system-race (7). Spot-checks were
+#     false positives: a debug log of a mkstemp temp filename inside
+#     utils.atomic_replace, and tools/url_safety.py logging the very
+#     hostname it was about to block. Generic helpers (atomic_write_text,
+#     kanban_db, profiles) are called from hundreds of sites, so one
+#     flagged sink fans out into hundreds of alerts -- 1427 alerts over
+#     246 files, 39% of them in just 12 files. That volume buries real
+#     findings instead of surfacing them.
 #   - languages: python, javascript (TypeScript is bundled into the JS
 #     analysis per CodeQL docs), actions, rust, and c-cpp.
 #     rust covers apps/bootstrap-installer/src-tauri; c-cpp covers the
@@ -18,11 +30,23 @@
 #     workflow-edit / action-unpinning heuristics.
 #
 # Triggers:
-#   - push to main (PR-critical findings)
-#   - weekly cron on Monday 06:00 UTC (one slow scan per week, catches
-#     findings between push events without blocking every PR)
+#   - pull_request to main -- reviews a change BEFORE it merges, which is
+#     the only point where a finding is cheap to act on. Without this the
+#     analysis only ever ran on main after the fact, so it reported
+#     problems that were already merged.
+#     Caveat worth knowing: this fires for PRs targeting THIS repo's main
+#     (dependabot bumps, fork-internal work). PRs opened against
+#     NousResearch/hermes-agent run that repo's CI, which has no CodeQL,
+#     so those are still not gated from here.
+#   - push to main (catches anything landing outside a PR)
+#   - weekly cron on Monday 06:00 UTC (picks up new advisories against
+#     unchanged code)
 #
 # Minutes cost (rough, depends on repo size):
+#   - per-PR: ~3-6 min per language, 5 languages, so budget ~15-30 min
+#     of runner time per pull request. If dependabot volume makes that
+#     expensive, narrowing the PR matrix to python + javascript-typescript
+#     is the first thing to trim -- rust/c-cpp/actions rarely change.
 #   - per-push: ~3-6 min
 #   - weekly scheduled: ~3-6 min
 # Branch protections: the per-push block can be skipped on a docs-only
@@ -31,6 +55,8 @@
 name: "CodeQL"
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   schedule:
@@ -72,7 +98,6 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          queries: security-extended
           config-file: ./.github/codeql/codeql-config.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
