@@ -1,0 +1,12 @@
+name: "hermes-agent CodeQL config"
+
+# Vendored third-party source. The c-cpp analysis exists to cover our own
+# FTS5 extension (native/fts5_cjk/fts5_cjk.c); the SQLite amalgamation it
+# builds against is upstream code we neither wrote nor patch, and including
+# it buries our findings under thousands of results from a codebase we do
+# not control.
+paths-ignore:
+  - native/fts5_cjk/vendor
+  - "**/node_modules"
+  - "**/dist"
+  - "**/build"

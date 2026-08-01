@@ -627,3 +627,78 @@ class TestLoadTimeSnapshotSanitization:
         # Block marker appears exactly once, not nested
         assert snapshot.count("[BLOCKED:") == 1
         assert "Clean fact" in snapshot
+
+    # --- write-time auto-consolidate tests (added 2026-07-24, fix for the
+    # "memory full" recurring problem — see skills/hermes-memory-self-management) ---
+
+    def test_add_overflow_triggers_auto_consolidate(self, tmp_path, monkeypatch):
+        """When add() would push MEMORY.md past cap, _auto_consolidate is
+        called and the add succeeds if compress freed enough space.
+
+        The compress script is shelled out to. We stub it with a fake that
+        rewrites the file to be smaller (simulating real compress behavior).
+        """
+        import subprocess
+        # _auto_consolidate() uses BOTH get_memory_dir() (for MEMORY.md/USER.md)
+        # AND get_hermes_home() (for the script path at <hermes_home>/scripts/).
+        # Redirect both to the same tmp_path so the test is self-contained.
+        monkeypatch.setattr("tools.memory_tool.get_memory_dir", lambda: tmp_path)
+        monkeypatch.setattr("tools.memory_tool.get_hermes_home", lambda: tmp_path)
+        # _auto_consolidate() requires the compress script to exist at
+        # <hermes_home>/scripts/memory-auto-compress.py — create a stub.
+        (tmp_path / "scripts").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "scripts" / "memory-auto-compress.py").write_text(
+            "# stub for test\n", encoding="utf-8"
+        )
+        # Cap is 2200 by default. Fill MEMORY.md to ~1900 chars, then add an
+        # entry of 600 chars so new_total = 1900 + 600 + len(ENTRY_DELIMITER)
+        # > 2200, forcing the cap-check to fire. Auto-consolidate is then
+        # expected to shrink the file so the add succeeds.
+        existing = "x" * 1900
+        (tmp_path / "MEMORY.md").write_text(existing + "\n", encoding="utf-8")
+        s = MemoryStore(memory_char_limit=2200)
+        s.load_from_disk()
+        assert s._char_count("memory") > 1800
+
+        compress_calls = []
+        def fake_run(*args, **kwargs):
+            compress_calls.append(1)
+            # Shrink the file: overwrite with a single small entry
+            (tmp_path / "MEMORY.md").write_text("§\nshrunken\n", encoding="utf-8")
+            r = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+            return r
+        monkeypatch.setattr("tools.memory_tool.subprocess.run", fake_run)
+
+        # 600 chars + delimiter, pushes new_total well past cap
+        new_entry = "y" * 600
+        result = s.add("memory", new_entry)
+        assert compress_calls, "auto-consolidate was not triggered"
+        assert result["success"], f"add failed: {result.get('error')}"
+        assert "auto-consolidated" in result.get("message", "").lower()
+
+    def test_add_overflow_falls_through_when_no_compress_script(self, tmp_path, monkeypatch):
+        """If memory-auto-compress.py doesn't exist, add() returns the
+        standard consolidation_failure (back-compat for environments without
+        the script).
+        """
+        monkeypatch.setattr("tools.memory_tool.get_memory_dir", lambda: tmp_path)
+        # Fill to ~1900 chars then attempt to add 600 — overflow guaranteed.
+        existing = "x" * 1900
+        (tmp_path / "MEMORY.md").write_text(existing + "\n", encoding="utf-8")
+        s = MemoryStore(memory_char_limit=2200)
+        s.load_from_disk()
+
+        # Simulate the script being missing: subprocess.run returns nonzero.
+        import subprocess
+        def fake_run_fail(*args, **kwargs):
+            return subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="", stderr="script not found"
+            )
+        monkeypatch.setattr("tools.memory_tool.subprocess.run", fake_run_fail)
+
+        result = s.add("memory", "y" * 600)
+        # Falls through to standard consolidation_failure
+        assert not result["success"], f"add should have failed, got: {result}"
+        assert "Consolidate" in result.get("error", "") or "exceed" in result.get("error", "")
+
+

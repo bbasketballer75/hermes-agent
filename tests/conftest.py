@@ -1449,3 +1449,64 @@ def _isolate_computer_use_approval_state():
             _cu_tool._session_auto_approve.clear()
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_tool_definition_caches():
+    """Clear the process-global tool-definition caches around every test.
+
+    Two module-level caches outlive any single test and silently change what
+    ``model_tools.get_tool_definitions()`` returns:
+
+    * ``tools.registry._check_fn_cache`` — per-``check_fn`` verdicts, TTL 30 s,
+      keyed by function object. A test that probes a tool's ``check_fn`` while
+      that feature looks unavailable stamps ``False`` in for the next 30 s.
+    * ``model_tools._tool_defs_cache`` — memoized definition lists. Its cache
+      key covers ``registry._generation`` and the config fingerprint, but NOT
+      the ``check_fn`` verdicts resolved underneath it, so a poisoned TTL entry
+      is invisible to the key.
+
+    Net effect: any test computing a toolset after an unlucky neighbour gets a
+    silently short list. Verified concretely — poisoning the TTL cache drops
+    ``memory``, ``skill_view`` and ``skills_list`` from
+    ``get_tool_definitions(enabled_toolsets=["memory", "skills"])``, which is
+    what made
+    ``test_background_review_installs_thread_local_whitelist`` fail with
+    ``assert 'memory' in {'skill_manage'}`` in one CI slice while passing in
+    isolation, in its own file, and on rerun.
+
+    ``tests/test_get_tool_definitions_cache_isolation.py`` already established
+    this pattern per-file for ``_tool_defs_cache``; this lifts it suite-wide
+    and adds the ``check_fn`` cache, which is the one that actually carries
+    the poisoned verdict. 116 test files touch tool definitions or the
+    registry, so per-file fixtures could not cover the exposure.
+
+    Cost, measured on ``tests/run_agent/`` + ``tests/tools/test_registry.py``
+    (1271 passing tests): 515 s -> 602 s, about +17% on a deliberately
+    tool-heavy subset; the full suite is diluted well below that. A variant
+    that dropped only the ``False`` verdicts — on the theory that re-probing
+    available tools was the expense — was measured at 602 s, i.e. no
+    improvement, so the simpler blanket clear is kept. The cost is dominated
+    by rebuilding ``_tool_defs_cache``, which cannot be preserved: its key
+    does not cover the verdicts underneath it, so an entry computed from a
+    poisoned ``False`` would survive and keep serving the short list.
+    """
+
+    def _clear():
+        try:
+            from tools import registry
+
+            with registry._check_fn_cache_lock:
+                registry._check_fn_cache.clear()
+        except Exception:
+            pass
+        try:
+            import model_tools
+
+            model_tools._tool_defs_cache.clear()
+        except Exception:
+            pass
+
+    _clear()
+    yield
+    _clear()
