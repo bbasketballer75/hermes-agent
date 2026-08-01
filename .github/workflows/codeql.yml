@@ -1,0 +1,83 @@
+# CodeQL security analysis for hermes-agent.
+#
+# Scope:
+#   - queries: security-extended (CVE-class findings only).
+#     We do NOT enable security-and-quality because the "quality" set
+#     is FP-heavy on a single-maintainer Python codebase (e.g. it
+#     flags standard library trust-boundary patterns the project
+#     explicitly relies on).
+#   - languages: python, javascript (TypeScript is bundled into the JS
+#     analysis per CodeQL docs), actions, rust, and c-cpp.
+#     rust covers apps/bootstrap-installer/src-tauri; c-cpp covers the
+#     SQLite FTS5 extension in native/fts5_cjk (its vendored amalgamation
+#     is excluded via .github/codeql/codeql-config.yml so third-party
+#     SQLite source doesn't drown the real findings).
+#     actions is analyzed rather than delegated to supply-chain-audit.yml:
+#     SHA pinning does not address `${{ }}` expression injection or
+#     `run:` script issues, and that workflow explicitly dropped the
+#     workflow-edit / action-unpinning heuristics.
+#
+# Triggers:
+#   - push to main (PR-critical findings)
+#   - weekly cron on Monday 06:00 UTC (one slow scan per week, catches
+#     findings between push events without blocking every PR)
+#
+# Minutes cost (rough, depends on repo size):
+#   - per-push: ~3-6 min
+#   - weekly scheduled: ~3-6 min
+# Branch protections: the per-push block can be skipped on a docs-only
+# change via `[skip ci]` in the commit message.
+
+name: "CodeQL"
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+          - language: rust
+            build-mode: none
+          - language: c-cpp
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v4
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@3b0bd1d116c0bde30213346b22d4f634d96a2fb0  # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@3b0bd1d116c0bde30213346b22d4f634d96a2fb0  # v3
+        with:
+          category: "/language:${{ matrix.language }}"
