@@ -264,6 +264,13 @@ class TestGitBashCoreutilsOnPath:
         existing = {e.replace("\\", "/") for e in existing}
         return lambda p: p.replace("\\", "/") in existing
 
+    @staticmethod
+    def _norm(p):
+        # Production uses os.path.join on the test host. On Windows that
+        # yields mixed-slash strings (e.g. "/pg\\mingw64\\bin"); on POSIX
+        # CI it yields pure forward-slash. Compare in a host-agnostic form.
+        return os.path.normpath(p).replace("\\", "/")
+
     def test_derives_dirs_from_portablegit_layout(self, monkeypatch):
         monkeypatch.setattr(local_mod, "_IS_WINDOWS", True)
         monkeypatch.setattr(local_mod, "_git_bash_bin_dirs_cache", None)
@@ -272,12 +279,13 @@ class TestGitBashCoreutilsOnPath:
         monkeypatch.setattr(local_mod.os.path, "isdir", self._fake_isdir(existing))
 
         dirs = _git_bash_bin_dirs()
+        norm = [self._norm(d) for d in dirs]
 
         # usr/bin is the load-bearing coreutils dir; mingw64 precedes it.
-        assert "/pg/usr/bin" in dirs
-        assert dirs.index("/pg/mingw64/bin") < dirs.index("/pg/usr/bin")
+        assert "/pg/usr/bin" in norm
+        assert norm.index("/pg/mingw64/bin") < norm.index("/pg/usr/bin")
         # Non-existent dirs (mingw32, usr/local/bin) are excluded.
-        assert "/pg/mingw32/bin" not in dirs
+        assert "/pg/mingw32/bin" not in norm
 
 
     def test_empty_off_windows(self, monkeypatch):
