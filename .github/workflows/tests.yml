@@ -160,13 +160,27 @@ jobs:
           merge-multiple: true
 
       - name: Merge into single durations file
+        # Each slice uploads a single-object JSON file like
+        # {"path/to/test.py": 1.23}. With ``merge-multiple: true`` the
+        # download-artifact action concatenates all 8 slice files byte-by-byte
+        # into one file (``{"a":1}{"b":2}{"c":3}...``), which ``json.load``
+        # rejects with "Extra data: line N column 1". Use ``raw_decode`` in a
+        # loop so we accept either layout (concatenated or already-merged).
+        # raw_decode does NOT skip leading whitespace on subsequent calls, so
+        # lstrip the buffer before each invocation.
         run: |
           python3 -c "
-          import json, glob, os
+          import json, glob
           merged = {}
+          decoder = json.JSONDecoder()
           for f in glob.glob('durations/*test_durations.json'):
             with open(f) as fh:
-              merged.update(json.load(fh))
+              text = fh.read()
+            while text.strip():
+              text = text.lstrip()
+              obj, idx = decoder.raw_decode(text)
+              merged.update(obj)
+              text = text[idx:]
           with open('test_durations.json', 'w') as fh:
             json.dump(merged, fh, indent=2, sort_keys=True)
           print(f'Merged {len(merged)} file durations')
