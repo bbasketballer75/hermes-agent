@@ -4,6 +4,7 @@ import logging
 import ntpath
 import os
 import platform
+import posixpath
 import re
 import shutil
 import signal
@@ -964,19 +965,24 @@ def _git_bash_bin_dirs() -> list[str]:
         _git_bash_bin_dirs_cache = []
         return _git_bash_bin_dirs_cache
 
-    bin_dir = os.path.dirname(bash)          # <root>\bin  or  <root>\usr\bin
-    parent = os.path.dirname(bin_dir)
-    # MinGit ships bash under usr\bin; PortableGit/system Git under bin.
-    root = os.path.dirname(parent) if os.path.basename(parent).lower() == "usr" else parent
+    # Use posixpath for these derivations so the returned dirs stay in Git
+    # Bash's /c/... (forward-slash) form regardless of the host OS.  Both
+    # Windows ``os.path.isdir`` and the bash subprocess that consumes PATH
+    # accept forward slashes, and forward-slash output matches the test
+    # contract in tests/tools/test_local_env_windows_msys.py.
+    bin_dir = posixpath.dirname(bash)            # <root>/bin  or  <root>/usr/bin
+    parent = posixpath.dirname(bin_dir)
+    # MinGit ships bash under usr/bin; PortableGit/system Git under bin.
+    root = posixpath.dirname(parent) if posixpath.basename(parent).lower() == "usr" else parent
 
     # Order mirrors Git-for-Windows /etc/profile so coreutils win over the
     # same-named Windows System32 tools (find.exe, sort.exe) inside the shell.
     for candidate in (
-        os.path.join(root, "mingw64", "bin"),
-        os.path.join(root, "mingw32", "bin"),
-        os.path.join(root, "usr", "local", "bin"),
-        os.path.join(root, "usr", "bin"),
-        os.path.join(root, "bin"),
+        posixpath.join(root, "mingw64", "bin"),
+        posixpath.join(root, "mingw32", "bin"),
+        posixpath.join(root, "usr", "local", "bin"),
+        posixpath.join(root, "usr", "bin"),
+        posixpath.join(root, "bin"),
     ):
         if os.path.isdir(candidate) and candidate not in dirs:
             dirs.append(candidate)

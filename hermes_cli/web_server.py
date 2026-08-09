@@ -12081,12 +12081,52 @@ def _resume_cron_job_sync(job_id: str, profile: Optional[str] = None):
 
 
 def _trigger_cron_job_sync(job_id: str, profile: Optional[str] = None):
+    """Manual trigger via ``hermes cron run <id>`` or the dashboard ``Run`` button.
+
+    Real fix (2026-08-07): actually run the job via the scheduler's
+    ``fire_due`` rather than just re-queueing it for the next tick. The legacy
+    path (``trigger_job`` -> ``update_job(next_run_at=now)``) only stamped the
+    timestamp and waited for the next 60s tick — which silently did nothing
+    if the gateway was busy, in a restart cycle, or had any backlog ahead
+    of the test-fire in its parallel pool. ``fire_due`` does the same CAS
+    claim + ``run_one_job`` invocation that the cron_fire webhook uses
+    for external triggers, so the caller sees real execution outcomes
+    (success / failure / output) instead of the misleading
+    "Ran now: failed" that the legacy path always produced.
+
+    Returns the post-run job record so the CLI can show "Ran now:
+    succeeded" / "Ran now: failed" accurately. If the CAS claim was lost
+    (another caller fired the same job in the same TTL window), the
+    next-tick fallback path (``update_job(next_run_at=now)``) ensures the
+    job runs soon anyway.
+    """
     selected = profile or _find_cron_job_profile(job_id)
     if not selected:
         raise HTTPException(status_code=404, detail="Job not found")
-    job = _call_cron_for_profile(selected, "trigger_job", job_id)
+
+    # Set next_run_at to now as a fallback so the next tick will pick up
+    # the job even if fire_due's CAS claim is lost to a concurrent caller.
+    _call_cron_for_profile(selected, "trigger_job", job_id)
+
+    # Actually run the job via the scheduler's fire_due. This does
+    # claim_job_for_fire + create_execution + run_one_job in one call,
+    # scoped to the selected profile's HERMES_HOME and cron store.
+    fired = _fire_cron_job_for_profile(selected, job_id)
+
+    # Re-read the job so the response includes execution_success /
+    # executed / last_output_path. If the CAS was lost, fire_due returned
+    # False but the trigger_job-stamped next_run_at ensures the next tick
+    # still picks it up. Surface either outcome honestly to the caller.
+    job = _call_cron_for_profile(selected, "get_job", job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Job not found after fire")
+    if not fired:
+        # CAS lost — another caller won. The next tick will fire it from
+        # the next_run_at we just stamped. Don't fail the request.
+        job["execution_skipped"] = (
+            "Another caller already fired this job; "
+            "the next tick will claim it."
+        )
     return job
 
 
@@ -14810,8 +14850,33 @@ def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
     if not bound_host:
         return None
 
+    # When the dashboard is loopback-bound but fronted by a reverse proxy
+    # (e.g. cloudflared + Cloudflare Access) that rewrites the Host header
+    # to ``localhost``, the browser still sends Origin: https://public.host
+    # because cloudflared does not rewrite Origin. Operators opt into this
+    # topology by setting ``dashboard.public_url`` — when present, accept
+    # requests whose Host/Origin matches either the bound host (local dev,
+    # SSH/Tailscale tunnels) OR the public URL's host.
+    public_host: str = ""
+    if bound_host in _LOOPBACK_HOSTS:
+        try:
+            from hermes_cli.dashboard_auth.prefix import resolve_public_url
+            import urllib.parse as _up
+            _purl = resolve_public_url()
+            if _purl:
+                public_host = (_up.urlparse(_purl).netloc or "").lower()
+        except Exception:  # noqa: BLE001 — best-effort; never fail-closed on config lookup
+            public_host = ""
+
+    def _host_accepted(value: str) -> bool:
+        if _is_accepted_host(value, bound_host):
+            return True
+        if public_host and value and value.split(":", 1)[0].lower() == public_host:
+            return True
+        return False
+
     host_header = ws.headers.get("host", "")
-    if not _is_accepted_host(host_header, bound_host):
+    if not _host_accepted(host_header):
         return f"host_mismatch host={host_header or '?'} bound={bound_host}"
 
     origin = ws.headers.get("origin", "")
@@ -14828,7 +14893,7 @@ def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
     if not parsed.netloc:
         return f"origin_mismatch origin={origin} bound={bound_host}"
 
-    if not _is_accepted_host(parsed.netloc, bound_host):
+    if not _host_accepted(parsed.netloc):
         return f"origin_mismatch origin={origin} bound={bound_host}"
     return None
 
