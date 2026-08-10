@@ -2303,31 +2303,6 @@ def _read_windows_pyvenv_cfg(venv_dir: Path) -> dict[str, str]:
     return parsed
 
 
-def _to_bash_argv_path(path: Path) -> str:
-    """Convert a filesystem path to a form safe to pass as argv to bash.
-
-    On native Windows, bash is Cygwin/MSYS-based and does NOT auto-convert
-    Windows backslash paths to POSIX form: when ``argv`` carries
-    ``C:\\Users\\...`` the backslashes are interpreted as escape characters
-    and the resulting string ``CUsersbbask...`` is not a valid path.  The
-    fix is to hand bash an MSYS-style POSIX path like ``/c/Users/...`` so
-    no path conversion is required.
-
-    On Linux/macOS the path is returned unchanged.
-    """
-    if sys.platform != "win32":
-        return str(path)
-    posix = path.as_posix()
-    # Drive-letter form (C:/... or C:\...) -> /c/...
-    if len(posix) >= 2 and posix[1] == ":":
-        drive = posix[0].lower()
-        tail = posix[2:].lstrip("/")
-        return f"/{drive}/{tail}"
-    # UNC paths and others — fall back to forward-slash form; bash on
-    # Windows handles these without backslash-stripping.
-    return posix
-
-
 def _windows_cron_python_invocation(python_exe: str) -> tuple[str, dict[str, str]]:
     """Return an output-capable hidden Python invocation for Windows scripts.
 
@@ -2466,11 +2441,8 @@ def _run_job_script(
                 "On Windows, install Git for Windows (which ships Git Bash) "
                 "or rewrite the script as Python (.py)."
         )
-        # Use an MSYS POSIX path for bash argv — backslash paths get
-        # escape-stripped by Cygwin/MSYS bash, producing "no such file"
-        # errors that look like the script is missing (it isn't).
-        argv = [_bash, _to_bash_argv_path(path)]
-        env_overlay: dict[str, str] = {"MSYS_NO_PATHCONV": "1"}
+        argv = [_bash, str(path)]
+        env_overlay: dict[str, str] = {}
     else:
         python_exe, env_overlay = _windows_cron_python_invocation(sys.executable)
         argv = [python_exe, str(path)]

@@ -2493,13 +2493,6 @@ def _manage_thinking_signatures(
     replayed assistant tool-call messages.  See hermes-agent#13848 (Kimi) and
     hermes-agent#16748 (DeepSeek).
 
-    MiniMax-M3's Anthropic-compatible endpoints are a further documented
-    exception: they require their complete thinking/text/tool_use content
-    blocks to be returned verbatim on later tool-call turns. Its thinking
-    blocks are not Anthropic signatures, so M3 is routed around the generic
-    third-party strip below rather than through it. See MiniMax's Anthropic
-    API compatibility documentation.
-
     Nous Portal's ``/v1/messages`` route is the exception among third-party
     hosts: it proxies Claude to Anthropic/Vertex/Bedrock and validates the
     same signed thinking blocks.  Sticky ``session_id`` keeps a conversation

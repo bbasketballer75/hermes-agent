@@ -1,4 +1,4 @@
-﻿"""MiniMax provider profiles (international + China).
+"""MiniMax provider profiles (international + China).
 
 The default API-key routes use anthropic_messages because their base URLs end
 with /anthropic. Users can opt MiniMax-M3 into the OpenAI-compatible endpoint
@@ -92,7 +92,7 @@ minimax_oauth = MiniMaxProfile(
     base_url="https://api.minimax.io/anthropic",
     auth_type="oauth_external",
     supports_vision=True,
-    default_aux_model="MiniMax-M3",
+    default_aux_model="MiniMax-M2.7",
 )
 
 register_provider(minimax)
