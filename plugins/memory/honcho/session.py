@@ -634,7 +634,21 @@ class HonchoSessionManager:
         if not session.messages:
             return True
 
+        user_peer = self._get_or_create_peer(session.user_peer_id)
+        assistant_peer = self._get_or_create_peer(session.assistant_peer_id)
+        honcho_session = self._sessions_cache.get(session.honcho_session_id)
+
+        if not honcho_session:
+            honcho_session, _ = self._get_or_create_honcho_session(
+                session.honcho_session_id, user_peer, assistant_peer
+            )
+
+        # Skip assistant messages — same rationale as sync_turn: assistant
+        # output is dominated by self-narration/tool-call traces which the
+        # Honcho deriver turns into "hermes said X" observations on every
+        # turn. Source-side fix is the only durable mitigation.
         new_messages = [m for m in session.messages if not m.get("_synced")]
+        new_messages = [m for m in new_messages if m.get("role") != "assistant"]
         if not new_messages:
             return True
 
