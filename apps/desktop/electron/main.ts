@@ -2259,6 +2259,33 @@ function makeDashboardReadyFile() {
 // standard Git-for-Windows locations, then PATH. Cached after first probe.
 let _gitBinaryCache = null
 
+// A candidate can exist on disk and still be unusable. PortableGit under
+// %LOCALAPPDATA%\hermes\git ships `cmd\git.exe` as a small launcher that
+// re-execs the real binary under `mingw64\`; if that payload is missing —
+// an interrupted or partially-cleaned PortableGit install — the launcher is
+// still a file, so an existence-only check selects it and every later
+// candidate is skipped. It then fails at spawn time with
+//
+//   error launching git: The system cannot find the path specified.
+//
+// which surfaces to the user as "Couldn't check for updates. Check your
+// connection and try again." — pointing at the network instead of at git,
+// on a machine with a perfectly good Git-for-Windows one entry further down
+// the list. Probe the candidate before committing to it.
+function gitBinaryRuns(candidate) {
+  try {
+    execFileSync(candidate, ['--version'], {
+      stdio: 'ignore',
+      timeout: 5000,
+      windowsHide: true
+    })
+
+    return true
+  } catch {
+    return false
+  }
+}
+
 function resolveGitBinary() {
   if (_gitBinaryCache) {
     return _gitBinaryCache
@@ -2285,7 +2312,15 @@ function resolveGitBinary() {
     candidates.push(path.join(localAppData, 'Programs', 'Git', 'cmd', 'git.exe'))
   }
 
-  _gitBinaryCache = candidates.find(fileExists) || findOnPath('git') || 'git'
+  // Prefer a candidate that actually runs. Fall back to the first one that
+  // merely exists so behaviour is unchanged when the probe cannot run (locked
+  // down execution policy, AV interposing on spawn) rather than skipping a
+  // git that would have worked.
+  _gitBinaryCache =
+    candidates.find(c => fileExists(c) && gitBinaryRuns(c)) ||
+    candidates.find(fileExists) ||
+    findOnPath('git') ||
+    'git'
 
   return _gitBinaryCache
 }
