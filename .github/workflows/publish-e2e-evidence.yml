@@ -26,7 +26,7 @@ jobs:
     environment: gh-image
     steps:
       - name: Check out trusted publisher
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
@@ -37,7 +37,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh extension install drogers0/gh-image --pin v1.2.0
 
+      - name: Skip if GH_IMAGE_SESSION_TOKEN secret is not configured
+        # gh-image uploads via GitHub's internal web endpoint, which requires a
+        # user browser session cookie — not the API token. Forks that don't
+        # provision the GH_IMAGE_SESSION_TOKEN secret will fail with
+        # "GH_SESSION_TOKEN is required" forever, polluting the notification
+        # stream. Exit cleanly when the secret is missing so the workflow is
+        # a no-op until Austin wires up the cookie. To re-enable uploads,
+        # add the secret in repo Settings -> Secrets and variables -> Actions.
+        id: check-session-token
+        env:
+          GH_SESSION_TOKEN: ${{ secrets.GH_IMAGE_SESSION_TOKEN }}
+        run: |
+          if [ -z "$GH_SESSION_TOKEN" ]; then
+            echo "GH_IMAGE_SESSION_TOKEN secret is not configured on this fork."
+            echo "Skipping E2E evidence publish. Add the secret in repo settings to re-enable."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "GH_IMAGE_SESSION_TOKEN is configured; will attempt upload."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download and attach evidence
+        if: steps.check-session-token.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
