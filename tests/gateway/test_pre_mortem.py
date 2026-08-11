@@ -192,6 +192,96 @@ def test_parent_watcher_records_baseline(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 # ---------------------------------------------------------------------------
+# Signal handler — re-raise must terminate, not re-enter
+# ---------------------------------------------------------------------------
+
+
+# The handler is only exercisable in a child process: a correct one kills
+# the interpreter it runs in, so it can't be called from inside pytest.
+_SIGNAL_CHILD = """\
+import os, signal, sys
+sys.path.insert(0, {root!r})
+os.environ["HERMES_HOME"] = {home!r}
+from gateway import pre_mortem
+# Huge interval so the watcher thread never samples during the test.
+pre_mortem.install_pre_mortem_handlers(interval_s=99999.0)
+signal.raise_signal(getattr(signal, {signame!r}))
+# Reaching this line means the handler returned instead of terminating.
+sys.exit(99)
+"""
+
+
+@pytest.mark.parametrize(
+    "signame",
+    ["SIGTERM", "SIGINT"] + (["SIGBREAK"] if sys.platform == "win32" else []),
+)
+def test_signal_handler_terminates_without_re_entering(
+    signame: str, tmp_path: Path
+) -> None:
+    """Re-raising must kill us, not recurse back into the handler.
+
+    A handler is not reset on entry, so ``signal.raise_signal(signum)``
+    from inside one re-delivers to *itself*.  Before the disarm was added,
+    a single signal re-entered until the interpreter hit its recursion
+    limit: the child died with ``RecursionError`` and wrote 495 duplicate
+    ``pre_mortem.signal`` records, flooding the exact diagnostic log this
+    module exists to keep readable — and destroying the by-signal death
+    this module's docstring says it deliberately preserves.
+
+    Exactly one record and a signal-terminated exit are the contract.
+    """
+    import subprocess
+
+    root = str(Path(__file__).resolve().parents[2])
+    code = _SIGNAL_CHILD.format(root=root, home=str(tmp_path), signame=signame)
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
+
+    assert proc.returncode != 99, "handler returned — the process survived the signal"
+    assert proc.returncode != 0, f"expected death by signal, got clean exit\n{proc.stderr}"
+    assert "RecursionError" not in proc.stderr, (
+        f"handler re-entered itself:\n{proc.stderr[-2000:]}"
+    )
+
+    records = _read_diag(tmp_path)
+    sig_records = [r for r in records if r["tag"] == "pre_mortem.signal"]
+    assert len(sig_records) == 1, (
+        f"expected exactly 1 pre_mortem.signal record, got {len(sig_records)} "
+        "— more than one means the handler re-entered"
+    )
+    assert sig_records[0]["signal_name"] == signame
+
+
+def test_signal_handler_embeds_stacks_without_breaking_jsonl(tmp_path: Path) -> None:
+    """Stacks must land *inside* the record, keeping the log valid JSONL.
+
+    Two failure modes are pinned here at once.  The stacks have to be
+    captured at all — the gateway runs under ``pythonw.exe`` with no
+    console, so the previous stderr-bound ``faulthandler.dump_traceback()``
+    lost them entirely.  And they have to be captured as a *field*: this
+    log is strict JSONL shared with the CLI's ``_exit_diag`` writer, so a
+    raw multi-line traceback appended beside the records breaks every
+    reader of the file, including :func:`_read_diag` below.
+    """
+    import subprocess
+
+    root = str(Path(__file__).resolve().parents[2])
+    code = _SIGNAL_CHILD.format(root=root, home=str(tmp_path), signame="SIGTERM")
+    subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+
+    # _read_diag json.loads() every line — it raises if the log is corrupt.
+    records = _read_diag(tmp_path)
+    sig = [r for r in records if r["tag"] == "pre_mortem.signal"][0]
+
+    stacks = sig.get("stacks")
+    assert isinstance(stacks, dict) and stacks, f"no stacks captured: {sig!r}"
+    # The main thread is always present; frames are lists of source lines.
+    joined = "\n".join(line for frames in stacks.values() for line in frames)
+    assert "line" in joined and ".py" in joined, f"stacks look empty: {stacks!r}"
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

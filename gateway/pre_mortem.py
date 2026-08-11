@@ -52,13 +52,13 @@ Non-goals:
 from __future__ import annotations
 
 import errno
-import faulthandler
 import json
 import os
 import signal
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -193,7 +193,7 @@ _ORIGINAL_HANDLERS: Dict[int, Any] = {}
 
 
 def _on_term_signal(signum: int, frame: Any) -> None:  # noqa: ARG001
-    """Final-write a pre-mortem record then re-raise the signal.
+    """Disarm, final-write a pre-mortem record, then re-raise the signal.
 
     On Windows, SIGTERM is the typical wrapper for `taskkill /F` *when the
     caller opts into graceful* (without ``/F``) — taskkill first sends
@@ -203,33 +203,31 @@ def _on_term_signal(signum: int, frame: Any) -> None:  # noqa: ARG001
     proceeds.  If the caller used ``/F`` (TerminateProcess), no handler
     runs at all — that's the parent-watcher thread's job.
     """
+    # DISARM FIRST.  `signal.raise_signal(signum)` below re-delivers the same
+    # signal, and a handler is *not* reset on entry — so re-raising while we
+    # are still installed re-enters this function instead of terminating
+    # (verified: 30 re-entries from a single SIGINT).  Restoring SIG_DFL up
+    # front also means an impatient supervisor's second SIGTERM kills us
+    # immediately rather than stacking another frame while we write below.
+    try:
+        signal.signal(signum, signal.SIG_DFL)
+    except Exception:
+        pass
+
     sig_name = _signal_name(signum)
     try:
-        # faulthandler.dump_traceback writes to stderr by default; redirect
-        # it to the same diag log so the stack ends up next to the rest of
-        # the evidence.  Save/restore so we don't permanently rewire it.
-        path = _diag_log_path()
-        if path is not None:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with open(path, "a", encoding="utf-8") as f:
-                    saved_stderr = faulthandler.enable(file=f)
-                    try:
-                        faulthandler.dump_traceback()
-                    finally:
-                        faulthandler.enable(file=saved_stderr)
-            except Exception:
-                pass
         _record(
             "pre_mortem.signal",
             signal_name=sig_name,
             signal_number=signum,
+            stacks=_capture_stacks(),
             **_proc_context(),
         )
     finally:
         # Re-raise so the natural exit pathway runs (signal handlers must
         # not return normally to be useful here — that would let the
-        # process keep running after a SIGTERM).
+        # process keep running after a SIGTERM).  We disarmed above, so this
+        # dispatches to SIG_DFL and terminates rather than recursing.
         try:
             signal.raise_signal(signum)  # type: ignore[attr-defined]
         except (AttributeError, OSError):
@@ -242,6 +240,37 @@ def _on_term_signal(signum: int, frame: Any) -> None:  # noqa: ARG001
                 # 128+N "killed by signal N" code so the lifecycle ledger
                 # sees an exit code rather than an os._exit suppression.
                 os._exit(128 + signum)
+
+
+def _capture_stacks() -> Dict[str, list]:
+    """Every thread's stack, as JSON-embeddable lists of strings.
+
+    Deliberately NOT ``faulthandler.dump_traceback(file=...)``.  The diag
+    log is strict JSONL — the CLI's ``_exit_diag`` writer, the on-call
+    triage script and this module's own reader all parse it line by line —
+    so dumping a raw multi-line traceback beside the records corrupts the
+    file for every consumer.  Embedding the stacks as a field keeps the
+    evidence in the one place people already grep, and keeps it parseable.
+
+    We are executing inside a Python-level handler, so the interpreter is
+    healthy and ``sys._current_frames()`` is sound here; faulthandler's
+    ability to dump from a wedged interpreter buys us nothing at this point.
+
+    Best-effort: returns ``{}`` rather than raising, since a diagnostics
+    failure must never delay the exit.
+    """
+    try:
+        names = {t.ident: t.name for t in threading.enumerate()}
+        out: Dict[str, list] = {}
+        for tid, frame in sys._current_frames().items():
+            label = f"{names.get(tid, 'unknown')}({tid})"
+            out[label] = [
+                line.rstrip("\n")
+                for line in traceback.format_stack(frame)
+            ]
+        return out
+    except Exception:
+        return {}
 
 
 def _signal_name(signum: int) -> str:
