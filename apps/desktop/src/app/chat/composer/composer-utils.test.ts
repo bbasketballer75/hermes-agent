@@ -86,6 +86,32 @@ describe('acceptsTriggerCompletion', () => {
   it('keeps Tab as the explicit accept even over free text', () => {
     expect(press('Tab', { freeTextArgStage: true, query: 'goal stat' })).toBe(true)
   })
+
+  // Regression: typing `/fl` followed by Space used to silently commit the top
+  // fuzzy match (e.g. `/flash-gsd`) before the user finished typing the command
+  // name. The popover selected the fuzzy fit by default; the Space accept path
+  // took it without asking. The Composer now refuses Space-commit unless the
+  // highlighted row literally starts with what the user typed.
+  it('refuses Space when the highlighted row only fuzzily matches the query', () => {
+    // The bug: highlighted row is `/flash-gsd` while user typed `/fl`.
+    // Fix: literal-prefix check fails → Space is no longer accepted.
+    expect(press(' ', { query: 'fl', highlightedText: '/flash-gsd' })).toBe(false)
+    expect(press(' ', { query: 'pers', highlightedText: '/personality-creative' })).toBe(false)
+  })
+
+  it('still accepts Space when the highlighted row literally prefixes the query', () => {
+    // Happy path 1: user typed the full command name; arg-mode begins on Space.
+    expect(press(' ', { query: 'personality', highlightedText: '/personality' })).toBe(true)
+    // Happy path 2: a partial-prefix that exactly aligns with the typed text.
+    expect(press(' ', { query: '/pers', highlightedText: '/personality' })).toBe(false) // still fuzzy
+    expect(press(' ', { query: 'pe', highlightedText: '/personality' })).toBe(false)         // still fuzzy
+  })
+
+  it('accepts Space when no highlightedText is known (legacy callers)', () => {
+    // Existing call sites that have not been updated pass no `highlightedText`.
+    // The fix must not regress them: prior accept-on-Space behavior is preserved.
+    expect(press(' ', { query: 'flash' })).toBe(true)
+  })
 })
 
 describe('pickPlaceholder', () => {
