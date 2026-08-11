@@ -25,13 +25,25 @@ Design:
 
 import json
 import logging
+import os
+import subprocess
+import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+
 from hermes_constants import get_hermes_home
 from typing import Dict, Any, List, Optional, Tuple
 
 from utils import atomic_write_text
+from tools.threat_patterns import first_threat_message as _first_threat_message
+# Note: `from tools.registry import registry, tool_error` is duplicated
+# at the bottom of the file under "# --- Registry ---" (intentional for
+# module-load ordering). Keep the bottom one; remove the redundant top
+# import to avoid two import sites for the same module.
+
+log = logging.getLogger(__name__)
 
 # fcntl is Unix-only; on Windows use msvcrt for file locking
 msvcrt = None
@@ -79,9 +91,6 @@ ENTRY_DELIMITER = "\n§\n"
 #    entry persists for the entire session and across sessions until
 #    explicitly removed.
 # ---------------------------------------------------------------------------
-
-from tools.threat_patterns import first_threat_message as _first_threat_message
-
 
 def _scan_memory_content(content: str) -> Optional[str]:
     """Scan memory content for injection/exfil patterns. Returns error string if blocked."""
@@ -199,6 +208,42 @@ class MemoryStore:
                 "in a later turn."
             ),
         }
+
+    def _auto_consolidate(self, target: str, timeout: int = 5) -> bool:
+        """Shell out to memory-auto-compress.py to free up space in `target`.
+
+        Called from add() right before the cap-rejection return. The caller
+        (add) re-measures after this returns, so we only return True if the
+        compress script ran successfully. The cap comparison is done by the
+        caller (add) under the file lock, not here.
+
+        Returns True if the compress script ran (returncode 0) and the file
+        was reloaded successfully. Returns False if the script is missing,
+        returned nonzero, timed out, or raised OSError. Designed to be cheap
+        and safe to call on every overflow — caps at `timeout` seconds.
+        """
+        hermes_home = get_hermes_home()
+        script = hermes_home / "scripts" / "memory-auto-compress.py"
+        if not script.exists():
+            return False
+        try:
+            r = subprocess.run(
+                [sys.executable, str(script)],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if r.returncode != 0:
+                log.debug("memory auto-consolidate: script returned %d", r.returncode)
+                return False
+            # Reload the cache so the disk state is reflected in _entries.
+            # Without this, _char_count() returns the cached entry list
+            # (which we just loaded pre-consolidate) and the add() flow
+            # will think consolidation did nothing.
+            self._reload_target(target, skip_drift=True)
+            return True
+        except (subprocess.TimeoutExpired, OSError) as e:
+            log.debug("memory auto-consolidate failed: %s", e)
+            return False
+
 
     def load_from_disk(self):
         """Load entries from MEMORY.md and USER.md, capture system prompt snapshot.
@@ -426,6 +471,24 @@ class MemoryStore:
             new_total = len(ENTRY_DELIMITER.join(new_entries))
 
             if new_total > limit:
+                # Write-time auto-consolidate: try to free up space by running
+                # the same compress script the weekly cron uses, before we
+                # reject. This is the proper fix for "memory full" — the cron
+                # alone is reactive, this is proactive. (skill:
+                # hermes-memory-self-management, fix: write-time auto-consolidate)
+                if self._auto_consolidate(target):
+                    # Re-measure under the same lock
+                    self._reload_target(target, skip_drift=True)
+                    entries = self._entries_for(target)
+                    new_entries = entries + [content]
+                    new_total = len(ENTRY_DELIMITER.join(new_entries))
+                    if new_total <= limit:
+                        entries.append(content)
+                        self._set_entries(target, entries)
+                        self.save_to_disk(target)
+                        return self._success_response(
+                            target, "Entry added (auto-consolidated to make room)."
+                        )
                 current = self._char_count(target)
                 return self._consolidation_failure({
                     "success": False,

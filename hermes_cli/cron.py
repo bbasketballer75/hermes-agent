@@ -45,6 +45,16 @@ def _normalize_skills(single_skill=None, skills: Optional[Iterable[str]] = None)
 def _cron_api(**kwargs):
     from tools.cronjob_tools import cronjob as cronjob_tool
 
+    # Real fix (2026-08-07): test-fires (action='run') must run synchronously.
+    # The async-delegation path loses jobs to the worker pool when inherited
+    # agent session env vars (HERMES_SESSION_ID) leak in via the CLI shell.
+    # Declaring a stateless channel for the run forces the cronjob tool down
+    # its synchronous path (_try_dispatch_background_run returns None →
+    # _execute_job_now runs the job synchronously here on the CLI thread).
+    if str(kwargs.get("action") or "").strip().lower() == "run":
+        from gateway.session_context import declare_stateless_channel
+        declare_stateless_channel()
+
     return json.loads(cronjob_tool(**kwargs))
 
 

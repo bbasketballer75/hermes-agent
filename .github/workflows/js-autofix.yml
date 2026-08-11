@@ -57,6 +57,13 @@ concurrency:
 jobs:
   generate-patch:
     name: Generate eslint --fix patch
+    # FORK-LOCAL: the apply-patch job pushes to bot/js-autofix and creates a
+    # PR using a GitHub App installation token. Forks don't have the App
+    # installed, so the PR step falls back to GITHUB_TOKEN, which forks cannot
+    # use to create pull requests ("GitHub Actions is not permitted to create
+    # or approve pull requests"). Skip the whole workflow on forks — running
+    # only generate-patch wastes a runner since nothing consumes the patch.
+    if: github.event.repository.fork == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

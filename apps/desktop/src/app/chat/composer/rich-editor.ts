@@ -21,6 +21,12 @@ import { slashCommandMatches, type SlashCommandScanOptions } from './slash-refs'
 
 export const RICH_INPUT_SLOT = 'composer-rich-input'
 
+/** Paints `data-placeholder` while the editor is empty.
+ *
+ *  @see markEditorEmptiness */
+export const COMPOSER_PLACEHOLDER_CLASS =
+  '[&:is(:empty,[data-empty])]:before:content-[attr(data-placeholder)] [&:is(:empty,[data-empty])]:before:text-muted-foreground/60'
+
 /** Chromium's litter: editing beside a `contenteditable=false` chip splits the
  *  line and leaves zero-length text nodes behind. They render as nothing and
  *  serialize as nothing, so no reader of the editor should count them. */

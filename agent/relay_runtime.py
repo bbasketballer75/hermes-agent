@@ -473,6 +473,11 @@ class RelayTurnContext:
     turn_id: str
     task_id: str
     handle: Any = None
+    # Native scope-stack depth captured at begin_turn push time. end_turn
+    # compares the current depth before popping; drift is logged as a
+    # warning (not an error) so a single anomalous tool/LLM cleanup path
+    # cannot cascade into a turn-finalization failure.
+    scope_depth_at_push: int | None = field(default=None, repr=False)
     logical_llm_calls: dict[str, Any] = field(default_factory=dict, repr=False)
     logical_llm_lock: threading.RLock = field(
         default_factory=threading.RLock,
@@ -649,6 +654,26 @@ class RelaySessionCoordinator:
             and lease.session is not None
         ):
             try:
+                # Capture native scope-stack depth before pushing so end_turn
+                # can detect drift (e.g. an extra pop from an error-cleanup
+                # path) and log it without cascading into a finalization
+                # failure. _ensure_scope_stack is idempotent — safe to call
+                # outside run_in_session. The depth query is a best-effort
+                # diagnostic: nemo_relay versions without ScopeStack.__len__
+                # leave scope_depth_at_push=None, which suppresses the
+                # drift warning without affecting the narrowed
+                # already-absent pop handling below.
+                try:
+                    from nemo_relay._context import ensure_scope_stack
+                    ensure_scope_stack()
+                except Exception:
+                    pass
+                try:
+                    turn.scope_depth_at_push = len(
+                        lease.host.relay.get_scope_stack()
+                    )
+                except TypeError:
+                    turn.scope_depth_at_push = None
                 turn.handle = lease.host.run_in_session(
                     lease.session,
                     lease.host.relay.scope.push,
@@ -684,6 +709,33 @@ class RelaySessionCoordinator:
                 if isinstance(lease.host, RelayRuntime) and lease.session is not None:
                     self._finish_logical_calls(turn, outcome=outcome)
                     if turn.handle is not None:
+                        # Drift detection: if the native scope stack depth
+                        # has changed since begin_turn pushed the turn
+                        # handle, some other code path (typically a
+                        # tool/LLM error-cleanup path) pushed or popped
+                        # outside the expected LIFO order. Log a warning
+                        # and proceed — the pop below will catch the
+                        # "already popped" case via its own exception.
+                        try:
+                            current_depth = len(
+                                lease.host.relay.get_scope_stack()
+                            )
+                        except TypeError:
+                            current_depth = None
+                        if (
+                            turn.scope_depth_at_push is not None
+                            and current_depth is not None
+                            and current_depth != turn.scope_depth_at_push
+                        ):
+                            logger.warning(
+                                "Hermes Relay scope-stack drift before "
+                                "turn handle pop: session_id=%s turn_id=%s "
+                                "push_depth=%s current_depth=%s",
+                                lease.session_id,
+                                turn.turn_id,
+                                turn.scope_depth_at_push,
+                                current_depth,
+                            )
                         try:
                             lease.host.run_in_session(
                                 lease.session,
@@ -695,9 +747,34 @@ class RelaySessionCoordinator:
                                     RUNTIME_INSTANCE_KEY: lease.host.runtime_id,
                                 },
                             )
+                        except RuntimeError as exc:
+                            # The native scope stack can drift when a
+                            # tool/LLM error-cleanup path pops or pushes
+                            # outside the expected LIFO order. Treat the
+                            # already-absent case as recoverable: the
+                            # caller wanted the scope gone, and any of
+                            # the well-known drift messages mean exactly
+                            # that.
+                            message = str(exc)
+                            if (
+                                "scope handle is not at the top" in message
+                                or "scope handle not found" in message
+                            ):
+                                logger.info(
+                                    "Hermes Relay turn handle already absent at "
+                                    "finalization: session_id=%s turn_id=%s",
+                                    lease.session_id,
+                                    turn.turn_id,
+                                )
+                            else:
+                                logger.warning(
+                                    "Hermes Relay turn finalization failed",
+                                    exc_info=True,
+                                )
                         except Exception:
                             logger.warning(
-                                "Hermes Relay turn finalization failed", exc_info=True
+                                "Hermes Relay turn finalization failed",
+                                exc_info=True,
                             )
             finally:
                 try:
@@ -779,6 +856,40 @@ class RelaySessionCoordinator:
                         RUNTIME_INSTANCE_KEY: lease.host.runtime_id,
                     },
                 )
+            except RuntimeError as exc:
+                with turn.logical_llm_lock:
+                    # Relay scopes are stack-owned. If the newest remaining
+                    # handle cannot close, older handles cannot close safely
+                    # either, so retain the unclosed prefix for diagnostics.
+                    for pending_request_id, pending_handle in logical_calls[
+                        : index + 1
+                    ]:
+                        turn.logical_llm_calls.setdefault(
+                            pending_request_id,
+                            pending_handle,
+                        )
+                message = str(exc)
+                if (
+                    "scope handle is not at the top" in message
+                    or "scope handle not found" in message
+                ):
+                    # Scope already gone — caller wanted it closed, and
+                    # the native stack reports it absent. Treat as a
+                    # recoverable drift signal (no warning traceback).
+                    # Retain the prefix so subsequent turns that share the
+                    # session can retry cleanup once the stack state
+                    # reconciles.
+                    logger.info(
+                        "Hermes Relay logical LLM scope already absent at "
+                        "finalization: request_id=%s",
+                        request_id,
+                    )
+                else:
+                    logger.warning(
+                        "Hermes Relay logical LLM finalization failed",
+                        exc_info=True,
+                    )
+                break
             except Exception:
                 with turn.logical_llm_lock:
                     # Relay scopes are stack-owned. If the newest remaining

@@ -219,6 +219,7 @@ import { formatBlockerMessage, formatProbeFailedMessage, scanVenvBlockers } from
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
 import { readWindowBelow } from './window-below'
+import { createWindowOpenHandler } from './window-open-policy'
 import { installWindowRendererLifecycle } from './window-renderer-lifecycle'
 import { createWindowRevealController } from './window-reveal'
 import {
@@ -2263,6 +2264,33 @@ function makeDashboardReadyFile() {
 // standard Git-for-Windows locations, then PATH. Cached after first probe.
 let _gitBinaryCache = null
 
+// A candidate can exist on disk and still be unusable. PortableGit under
+// %LOCALAPPDATA%\hermes\git ships `cmd\git.exe` as a small launcher that
+// re-execs the real binary under `mingw64\`; if that payload is missing —
+// an interrupted or partially-cleaned PortableGit install — the launcher is
+// still a file, so an existence-only check selects it and every later
+// candidate is skipped. It then fails at spawn time with
+//
+//   error launching git: The system cannot find the path specified.
+//
+// which surfaces to the user as "Couldn't check for updates. Check your
+// connection and try again." — pointing at the network instead of at git,
+// on a machine with a perfectly good Git-for-Windows one entry further down
+// the list. Probe the candidate before committing to it.
+function gitBinaryRuns(candidate) {
+  try {
+    execFileSync(candidate, ['--version'], {
+      stdio: 'ignore',
+      timeout: 5000,
+      windowsHide: true
+    })
+
+    return true
+  } catch {
+    return false
+  }
+}
+
 function resolveGitBinary() {
   if (_gitBinaryCache) {
     return _gitBinaryCache
@@ -2289,7 +2317,15 @@ function resolveGitBinary() {
     candidates.push(path.join(localAppData, 'Programs', 'Git', 'cmd', 'git.exe'))
   }
 
-  _gitBinaryCache = candidates.find(fileExists) || findOnPath('git') || 'git'
+  // Prefer a candidate that actually runs. Fall back to the first one that
+  // merely exists so behaviour is unchanged when the probe cannot run (locked
+  // down execution policy, AV interposing on spawn) rather than skipping a
+  // git that would have worked.
+  _gitBinaryCache =
+    candidates.find(c => fileExists(c) && gitBinaryRuns(c)) ||
+    candidates.find(fileExists) ||
+    findOnPath('git') ||
+    'git'
 
   return _gitBinaryCache
 }
@@ -8829,11 +8865,17 @@ function wireCommonWindowHandlers(win, { zoom = true }: { zoom?: boolean } = {})
   }
 
   installContextMenu(win)
-  win.webContents.setWindowOpenHandler(details => {
-    openExternalUrl(details.url)
-
-    return { action: 'deny' }
-  })
+  // Deny every window-open request and NEVER open a URL as a side effect here.
+  // Trusted external links go through the audited `hermes:openExternal` IPC
+  // channel; the only content that reaches this handler is what we did not
+  // initiate — including untrusted HTML in sandboxed `allow-scripts` iframes.
+  // Opening `details.url` here is the GHSA-9f4c-93c8-jc8g (CVE-2026-70608)
+  // vector: a sandboxed iframe with no `allow-popups` and no user gesture can
+  // force the OS browser to an attacker URL. No fixed 40.x Electron exists, so
+  // we close it at the seam. See electron/window-open-policy.ts.
+  win.webContents.setWindowOpenHandler(
+    createWindowOpenHandler(url => rememberLog(`[window-open] denied: ${url}`))
+  )
   win.webContents.on('will-navigate', (event, url) => {
     if ((DEV_SERVER && url.startsWith(DEV_SERVER)) || (!DEV_SERVER && url.startsWith('file:'))) {
       return

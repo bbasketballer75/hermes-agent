@@ -61,6 +61,7 @@ import { chipTypedPathOnSpace, pathifyRefs } from './path-refs'
 import { QueuePanel } from './queue-panel'
 import {
   beginComposerComposition,
+  COMPOSER_PLACEHOLDER_CLASS,
   composerPlainText,
   deleteChipBeforeCaret,
   deleteSelectionInEditor,
@@ -626,6 +627,9 @@ export function ChatBar({
       const accept = acceptsTriggerCompletion({
         activeExplicit: triggerActiveExplicit,
         freeTextArgStage: slashFreeTextArgStage,
+        // Pass the highlighted row's `text` so the Space accept path can
+        // refuse a fuzzy-only match (see composer-utils.ts acceptsTriggerCompletion).
+        highlightedText: triggerItems[triggerActive]?.text,
         key: event.key,
         kind: trigger.kind,
         query: trigger.query
@@ -951,6 +955,7 @@ export function ChatBar({
         autoCorrect="off"
         className={cn(
           'min-h-[1.625rem] min-h-(--composer-input-min-height) max-h-(--composer-input-max-height) cursor-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] bg-transparent pb-1 pr-1 pt-1 leading-normal text-foreground outline-none disabled:cursor-not-allowed',
+          COMPOSER_PLACEHOLDER_CLASS,
           '**:data-ref-text:cursor-default',
           stacked && 'pl-3',
           stacked ? 'w-full' : 'min-w-(--composer-input-inline-min-width) flex-1'

@@ -114,7 +114,13 @@ def atomic_replace(tmp_path: Union[str, Path], target: Union[str, Path]) -> str:
     try:
         os.replace(tmp_str, real_path)
     except OSError as exc:
-        if exc.errno not in (errno.EXDEV, errno.EBUSY):
+        # EACCES is included so Windows transient file-locks (AV/indexer
+        # holding jobs.json for a few hundred ms) fall through to the
+        # copy+fsync+unlink path.  Without this, a single Defender pass
+        # makes the whole cron tick fail with [WinError 5] Access is
+        # denied, and the next 1mcp-child-watchdog execution that calls
+        # _save_jobs_unlocked raises PermissionError out of the tick.
+        if exc.errno not in (errno.EXDEV, errno.EBUSY, errno.EACCES):
             raise
         logger.debug(
             "atomic_replace: %s -> %s failed with %s; falling back to copy",

@@ -1031,6 +1031,27 @@ class _Runtime:
                 output=fields,
                 metadata=self._event_metadata(),
             )
+        except RuntimeError as exc:
+            # The native scope stack can drift when a tool/LLM
+            # error-cleanup path pops or pushes outside the expected
+            # LIFO order. Treat the already-absent case as recoverable
+            # — the caller wanted the scope closed and the native stack
+            # reports it absent.
+            message = str(exc)
+            if (
+                "scope handle is not at the top" in message
+                or "scope handle not found" in message
+            ):
+                logger.info(
+                    "Hermes shared-metrics task handle already absent at "
+                    "close: session_id=%s task_id=%s",
+                    session.session_id,
+                    task_id,
+                )
+            else:
+                logger.warning(
+                    "Hermes shared-metrics task close failed", exc_info=True
+                )
         except Exception:
             logger.warning("Hermes shared-metrics task close failed", exc_info=True)
         finally:
