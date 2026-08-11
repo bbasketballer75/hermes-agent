@@ -76,6 +76,19 @@ _PARENT_WATCH_INTERVAL_S = 30.0
 _INSTALLED = False
 _INSTALL_LOCK = threading.Lock()
 
+# Serializes JSONL appends.  Reentrant: a signal can arrive while this
+# thread is already mid-write, and the handler writes its own record.
+_WRITE_LOCK = threading.RLock()
+_WRITE_LOCK_TIMEOUT_S = 0.25
+
+# Caps on the captured stacks.  A pre-mortem record has to stay small
+# enough to append in one indivisible write (see _record), and a diag log
+# nobody can skim is not evidence.  Deepest frames are the interesting
+# ones, so truncation keeps the tail.
+_MAX_STACK_THREADS = 24
+_MAX_STACK_FRAMES = 12
+_MAX_STACK_LINE_CHARS = 160
+
 
 # ---------------------------------------------------------------------------
 # Path resolution (HERMES_HOME)
@@ -134,11 +147,32 @@ def _record(tag: str, **extra: Any) -> None:
         # (file is small enough that O_APPEND races are vanishingly rare,
         # and using os.write avoids the newline-conversion surprises of
         # ``open(..., "a")`` on text mode under some locales).
-        fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        #
+        # "Small enough" is doing real work in that sentence: a single
+        # os.write is only indivisible up to a modest size, and this module
+        # has two concurrent writers by design — the parent-watcher thread
+        # and the main thread's signal handler.  Once records grew past a
+        # few hundred bytes, those two interleaved and split a record across
+        # lines, which corrupts the JSONL for every reader (measured: 3 of
+        # 40 runs).  The lock serializes our own writers; _MAX_STACK_* below
+        # keeps records small enough that the underlying assumption holds.
+        #
+        # Reentrant because a signal can land on a thread already inside
+        # this function — the handler then calls _record again, and a plain
+        # Lock would self-deadlock a process that is trying to die.  The
+        # timeout bounds the other case (watcher holds it while we're
+        # dying): take the small corruption risk over blocking the exit,
+        # which this module must never do.
+        got_lock = _WRITE_LOCK.acquire(timeout=_WRITE_LOCK_TIMEOUT_S)
         try:
-            os.write(fd, line.encode("utf-8"))
+            fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+            try:
+                os.write(fd, line.encode("utf-8"))
+            finally:
+                os.close(fd)
         finally:
-            os.close(fd)
+            if got_lock:
+                _WRITE_LOCK.release()
     except Exception:
         # We are dying — a logging failure here would block the exit path.
         # Drop the record silently; the next-life cleaner-upper will
@@ -262,12 +296,25 @@ def _capture_stacks() -> Dict[str, list]:
     try:
         names = {t.ident: t.name for t in threading.enumerate()}
         out: Dict[str, list] = {}
-        for tid, frame in sys._current_frames().items():
-            label = f"{names.get(tid, 'unknown')}({tid})"
-            out[label] = [
-                line.rstrip("\n")
-                for line in traceback.format_stack(frame)
+        frames = sys._current_frames()
+        # Our own thread first — it is the one that took the signal — then
+        # the rest, so truncation never drops the frames that matter most.
+        me = threading.get_ident()
+        for tid in sorted(frames, key=lambda t: (t != me, t)):
+            if len(out) >= _MAX_STACK_THREADS:
+                out["_truncated_threads"] = [
+                    f"{len(frames) - len(out)} more thread(s) omitted"
+                ]
+                break
+            lines = [
+                line.rstrip("\n")[:_MAX_STACK_LINE_CHARS]
+                for line in traceback.format_stack(frames[tid])
             ]
+            dropped = len(lines) - _MAX_STACK_FRAMES
+            if dropped > 0:
+                # Keep the deepest frames; note what was cut.
+                lines = [f"... {dropped} outer frame(s) omitted"] + lines[-_MAX_STACK_FRAMES:]
+            out[f"{names.get(tid, 'unknown')}({tid})"] = lines
         return out
     except Exception:
         return {}

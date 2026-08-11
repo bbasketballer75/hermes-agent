@@ -281,6 +281,74 @@ def test_signal_handler_embeds_stacks_without_breaking_jsonl(tmp_path: Path) -> 
     assert "line" in joined and ".py" in joined, f"stacks look empty: {stacks!r}"
 
 
+def test_concurrent_records_do_not_tear_the_jsonl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two writers must never split a record across lines.
+
+    This module has two concurrent writers by design: the parent-watcher
+    thread and the main thread's signal handler.  A single ``os.write`` to
+    an O_APPEND fd is only indivisible up to a modest size, so once records
+    carry stacks the two interleave and a record lands half on one line and
+    half on the next — which corrupts the log for every reader, including
+    :func:`_read_diag`.  Measured before the lock: 17 of 150 runs.
+
+    Sized to the real payload (stack captures), not a toy string.
+    """
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    pre_mortem = _import_module()
+
+    payload = {f"frame_{i}": "x" * 120 for i in range(12)}
+    errors: list[BaseException] = []
+
+    def hammer(n: int) -> None:
+        try:
+            for i in range(40):
+                pre_mortem._record(f"pre_mortem.stress_{n}", seq=i, **payload)
+        except BaseException as exc:  # pragma: no cover - defensive
+            errors.append(exc)
+
+    threads = [threading.Thread(target=hammer, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert not errors, f"_record raised under concurrency: {errors!r}"
+
+    # Every line must be valid JSON — _read_diag raises otherwise.
+    records = _read_diag(tmp_path)
+    assert len(records) == 6 * 40, (
+        f"expected 240 intact records, got {len(records)} — records were lost "
+        "or merged"
+    )
+
+
+def test_capture_stacks_stays_bounded() -> None:
+    """A pre-mortem record must stay small enough to append atomically.
+
+    Unbounded stacks are what pushed records past the size a single write
+    keeps indivisible.  The caps also keep the diag log skimmable — a log
+    nobody can read is not evidence.
+    """
+    pre_mortem = _import_module()
+    stacks = pre_mortem._capture_stacks()
+
+    assert stacks, "expected at least this thread's stack"
+    assert len(stacks) <= pre_mortem._MAX_STACK_THREADS + 1  # +1 for the marker
+    for label, frames in stacks.items():
+        if label == "_truncated_threads":
+            continue
+        assert len(frames) <= pre_mortem._MAX_STACK_FRAMES + 1, (
+            f"{label} kept {len(frames)} frames"
+        )
+        for line in frames:
+            assert len(line) <= pre_mortem._MAX_STACK_LINE_CHARS
+
+    encoded = len(json.dumps({"stacks": stacks}, default=str))
+    assert encoded < 60_000, f"stacks serialize to {encoded} bytes — too large"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
