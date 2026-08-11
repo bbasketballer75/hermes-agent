@@ -27285,6 +27285,26 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                  Useful for systemd services to avoid restart-loop deadlocks
                  when the previous process hasn't fully exited yet.
     """
+    # ── Pre-mortem handler (Windows UNCLEANLY-death forensics) ──────────
+    # Install SIGTERM/SIGBREAK/SIGINT handlers + a parent-PID watcher
+    # thread as the FIRST statement of start_gateway so we are wired before
+    # any subprocess, lock, or socket is created.  The handler writes a
+    # JSONL record to gateway-exit-diag.log and re-raises the signal so the
+    # natural exit pathway still runs (preserving the "unclean" sentinel
+    # the next boot relies on for detection).  TerminateProcess bypasses
+    # every Python handler — that's the parent-watcher's job to catch.
+    # Idempotent: a second call is a no-op so test doubles and the CLI
+    # wrapper don't double-install.  See gateway/pre_mortem.py for the
+    # full design rationale and the failure-mode catalog.
+    try:
+        from gateway.pre_mortem import install_pre_mortem_handlers
+        install_pre_mortem_handlers()
+    except Exception:
+        # A pre-mortem failure must NEVER block gateway startup.  Worst
+        # case the next unclean death goes back to being silent; the next
+        # deploy will retry the install.
+        pass
+
     from hermes_cli.resource_limits import apply_nofile_soft_limit
 
     apply_nofile_soft_limit()
