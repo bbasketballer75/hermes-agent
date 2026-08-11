@@ -70,6 +70,31 @@ def test_skill_review_prompt_forbids_retry_on_provenance_refusal(reloaded_backgr
     )
 
 
+def test_skill_review_prompt_names_the_real_provenance_marker(
+    reloaded_background_review,
+):
+    """The prompt must describe the marker the code actually writes.
+
+    ``created_by: "agent"`` is what makes a skill curator-managed (see
+    hermes_cli/curator.py and tools/skill_usage.py); ``"curator"`` is never
+    a created_by value anywhere. An earlier revision said the refusal
+    applied when created_by "is not 'curator'" — inverted, so it described
+    every curator-managed skill as off-limits and none of the off-limits
+    ones as such. The older assertions above all still passed on that text,
+    which is why this one pins the value explicitly.
+    """
+    prompt = reloaded_background_review._SKILL_REVIEW_PROMPT
+    assert "created_by" in prompt, "prompt must name the created_by marker"
+    assert "agent" in prompt, (
+        "prompt must identify 'agent' as the created_by value that marks a "
+        "skill curator-managed"
+    )
+    assert "'curator'" not in prompt and '"curator"' not in prompt, (
+        "'curator' is not a created_by value — quoting it as one inverts the "
+        "rule the curator is supposed to follow"
+    )
+
+
 def test_skill_review_prompt_caps_retry_attempts(reloaded_background_review):
     """If a single skill_manage / write_file call fails, retry at most
     once, then give up. Without this cap, the curator can ping-pong on
