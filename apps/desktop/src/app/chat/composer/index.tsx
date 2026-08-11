@@ -691,6 +691,9 @@ export function ChatBar({
       const accept = acceptsTriggerCompletion({
         activeExplicit: triggerActiveExplicit,
         freeTextArgStage: slashFreeTextArgStage,
+        // Pass the highlighted row's `text` so the Space accept path can
+        // refuse a fuzzy-only match (see composer-utils.ts acceptsTriggerCompletion).
+        highlightedText: triggerItems[triggerActive]?.text,
         key: event.key,
         kind: trigger.kind,
         query: trigger.query
