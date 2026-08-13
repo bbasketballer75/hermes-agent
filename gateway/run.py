@@ -463,10 +463,24 @@ def _ensure_windows_gateway_venv_imports() -> None:
 
     Some Windows restart paths run the gateway under uv's base ``pythonw.exe``
     to avoid the venv launcher respawning a visible console interpreter.  That
-    mode can import the source tree via cwd/PYTHONPATH but still miss optional
-    packages installed only in ``venv/Lib/site-packages`` (notably the MCP SDK).
-    Patch the live process before MCP discovery so tool injection does not
-    depend on every launcher preserving PYTHONPATH perfectly.
+    mode can import the source tree via cwd but still misses optional packages
+    installed only in ``venv/Lib/site-packages`` (notably the MCP SDK).  Patch
+    the live process before MCP discovery so tool injection does not depend on
+    every launcher preserving the venv layout perfectly.
+
+    Note: previous revisions also exported ``PYTHONPATH=<project_root>;
+    <site-packages>`` to ``os.environ`` on the theory that downstream
+    subprocesses would inherit it.  That mutation had no in-tree consumer (MCP
+    discovery runs in-process) and leaked ``PYTHONPATH`` into every subprocess
+    spawned afterward, including the bash terminals the chat session opens —
+    which broke cross-version Python tools (``uvx``, ``uv tool``,
+    ``honcho-cli``, ``mcp-server-*``) that inherit cp311 site-packages under
+    their own cp313 interpreters and crash with ``ModuleNotFoundError: No
+    module named 'pydantic_core._pydantic_core'``.  Removed in #15; any
+    future subprocess can build its
+    own scoped env block via
+    ``hermes_cli.gateway_windows._prepend_pythonpath`` like the NSSM service
+    wrapper already does.
     """
     if sys.platform != "win32":
         return
@@ -505,10 +519,14 @@ def _ensure_windows_gateway_venv_imports() -> None:
         sys.path.insert(insert_at, site_entry)
 
         os.environ["VIRTUAL_ENV"] = str(resolved_venv)
-        pythonpath = [project_entry, site_entry]
-        if os.environ.get("PYTHONPATH"):
-            pythonpath.append(os.environ["PYTHONPATH"])
-        os.environ["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(pythonpath))
+        # PYTHONPATH intentionally NOT mutated here — previous revisions
+        # exported `<project_root>;<site_packages>` to ``os.environ`` so
+        # subprocesses could find hermes-cli, but MCP discovery runs
+        # in-process (uses sys.path/site.addsitedir above) and the leak
+        # broke cross-version Python tools spawned from chat-session
+        # terminals.  See #15 for the full rationale; any future
+        # subprocess should pass a scoped env
+        # block (e.g. ``hermes_cli.gateway_windows._prepend_pythonpath``).
         return
 
 
