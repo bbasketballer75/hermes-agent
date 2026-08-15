@@ -75,6 +75,12 @@ export interface TriggerAcceptInput {
   activeExplicit: boolean
   /** The trigger is a slash command whose argument is arbitrary prose. */
   freeTextArgStage: boolean
+  /** `text` of the currently-highlighted popover item, when a popover is open.
+   *  Used by the Space accept path to refuse a prefix-only fuzzy match — if the
+   *  highlighted `text` does not literally start with `query` (modulo the `/`
+   *  prefix that the popover strips from `query`), typing Space keeps the
+   *  popover open instead of committing a command the user never typed. */
+  highlightedText?: string
   key: string
   kind: TriggerState['kind']
   query: string
@@ -94,6 +100,7 @@ export interface TriggerAcceptInput {
 export function acceptsTriggerCompletion({
   activeExplicit,
   freeTextArgStage,
+  highlightedText,
   key,
   kind,
   query
@@ -107,8 +114,49 @@ export function acceptsTriggerCompletion({
   }
 
   // Space is slash-only (an `@` mention takes a literal space) and gated to a
-  // non-empty query so a bare `/ ` still types a space.
-  return key === ' ' && kind === '/' && Boolean(query.trim()) && !freeTextArgStage
+  // non-empty query so a bare `/ ` still types a space. It also refuses to
+  // commit a row whose `text` only fuzzily matches the typed query: when the
+  // user types `/fl` and the top row is `/flash-gsd`, the highlighted row
+  // starts with `/fl` only because the backend's `complete.slash` ranked a
+  // fuzzy fit as best — there is no literal prefix match and pressing Space
+  // would silently rewrite the user's prose. Require that the highlighted row
+  // literally begins with the typed text (with the leading `/` it strips back
+  // out before reaching the popover), and otherwise let Space stay typed.
+  return (
+    key === ' ' &&
+    kind === '/' &&
+    Boolean(query.trim()) &&
+    !freeTextArgStage &&
+    slashHighlightIsLiteralPrefix(query, highlightedText)
+  )
+}
+
+/** True when the highlighted popover row literally prefixes the typed slash
+ *  query, or no highlighted row is known. `false` for fuzzy-only matches.
+ *
+ *  The trigger splits the leading `/` from `query`, so a typed `/flash-` shows
+ *  up in the popover as `query: 'flash-'` and the highlighted row keeps its
+ *  own `/` (`/flash-gsd`). Compare against the `/`-stripped highlighted text so
+ *  `flash-` is recognized as a prefix of `flash-gsd`. */
+export function slashHighlightIsLiteralPrefix(query: string, highlightedText: string | undefined): boolean {
+  if (!highlightedText) return true // unknown → trust prior behavior
+  const typed = query.trim()
+  if (!typed) return true
+  const stripped = highlightedText.replace(/^\//, '')
+  if (stripped === typed) return true
+  // Literal prefix: `flash` matches `flash-gsd`, `personality` matches
+  // `personality-creative`, but `flash` does NOT match `flashlight`.
+  // Any char that is NOT alphanumeric, underscore, dash, dot, or slash before
+  // the typed length is a fuzzy transition and we reject it.
+  if (stripped.length <= typed.length) return false
+  for (let i = 0; i < typed.length; i++) {
+    if (stripped[i] !== typed[i]) return false
+  }
+  const boundary = stripped[typed.length]
+  // The next char must be a word-boundary in the command name: `-`, `/`, or the
+  // end of the string. That prevents `flash` from matching `flashlight` while
+  // still accepting `flash-` → `flash-gsd`.
+  return boundary === undefined || boundary === '-' || boundary === '/'
 }
 
 export interface QueueEditState {
