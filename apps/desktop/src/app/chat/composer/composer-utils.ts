@@ -139,20 +139,36 @@ export function acceptsTriggerCompletion({
  *  own `/` (`/flash-gsd`). Compare against the `/`-stripped highlighted text so
  *  `flash-` is recognized as a prefix of `flash-gsd`. */
 export function slashHighlightIsLiteralPrefix(query: string, highlightedText: string | undefined): boolean {
-  if (!highlightedText) return true // unknown → trust prior behavior
+  if (!highlightedText) {
+    return true
+  } // unknown → trust prior behavior
   const typed = query.trim()
-  if (!typed) return true
+
+  if (!typed) {
+    return true
+  }
   const stripped = highlightedText.replace(/^\//, '')
-  if (stripped === typed) return true
+
+  if (stripped === typed) {
+    return true
+  }
+
   // Literal prefix: `flash` matches `flash-gsd`, `personality` matches
   // `personality-creative`, but `flash` does NOT match `flashlight`.
   // Any char that is NOT alphanumeric, underscore, dash, dot, or slash before
   // the typed length is a fuzzy transition and we reject it.
-  if (stripped.length <= typed.length) return false
-  for (let i = 0; i < typed.length; i++) {
-    if (stripped[i] !== typed[i]) return false
+  if (stripped.length <= typed.length) {
+    return false
   }
+
+  for (let i = 0; i < typed.length; i++) {
+    if (stripped[i] !== typed[i]) {
+      return false
+    }
+  }
+
   const boundary = stripped[typed.length]
+
   // The next char must be a word-boundary in the command name: `-`, `/`, or the
   // end of the string. That prevents `flash` from matching `flashlight` while
   // still accepting `flash-` → `flash-gsd`.

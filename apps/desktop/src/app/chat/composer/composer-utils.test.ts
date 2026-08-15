@@ -104,7 +104,7 @@ describe('acceptsTriggerCompletion', () => {
     expect(press(' ', { query: 'personality', highlightedText: '/personality' })).toBe(true)
     // Happy path 2: a partial-prefix that exactly aligns with the typed text.
     expect(press(' ', { query: '/pers', highlightedText: '/personality' })).toBe(false) // still fuzzy
-    expect(press(' ', { query: 'pe', highlightedText: '/personality' })).toBe(false)         // still fuzzy
+    expect(press(' ', { query: 'pe', highlightedText: '/personality' })).toBe(false) // still fuzzy
   })
 
   it('accepts Space when no highlightedText is known (legacy callers)', () => {
