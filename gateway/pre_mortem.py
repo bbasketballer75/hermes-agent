@@ -201,6 +201,32 @@ def _proc_context() -> Dict[str, Any]:
             out["current_user"] = proc.username()
         except Exception:
             pass
+        # Memory sample. Added 2026-08-16 because it is the ONE measurement
+        # that separates the two explanations for an unclean exit, and it was
+        # missing: every one of the 44 `gateway.previous_unclean_exit` records
+        # in gateway-exit-diag.log carries last_mem=None, so the paired
+        # `suspected_oom` field has never been a measurement — it is a constant
+        # False. Without an rss series we cannot tell an OOM kill from an
+        # external kill, and on 2026-08-16 three gateways died inside 30
+        # minutes (23min, 7min, then 13min lifetimes) with nothing logged at
+        # all, which is exactly the signature both explanations produce.
+        # rss/vms are cheap (a single syscall) and this runs on the existing
+        # 30s watcher tick, so the series costs nothing and makes the next
+        # crash diagnosable instead of merely observable.
+        try:
+            _mi = proc.memory_info()
+            out["rss_mb"] = round(_mi.rss / 1048576, 1)
+            out["vms_mb"] = round(getattr(_mi, "vms", 0) / 1048576, 1)
+            out["mem_percent"] = round(proc.memory_percent(), 2)
+        except Exception:
+            # Never let a diagnostic break the thing it is diagnosing.
+            out["rss_mb"] = None
+        try:
+            _vm = psutil.virtual_memory()
+            out["host_mem_available_mb"] = round(_vm.available / 1048576, 1)
+            out["host_mem_percent_used"] = _vm.percent
+        except Exception:
+            pass
         # Session id is Windows-only.  POSIX returns None — that's fine,
         # we just record what we can.
         try:
