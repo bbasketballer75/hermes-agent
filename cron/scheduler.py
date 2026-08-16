@@ -3584,10 +3584,50 @@ def _run_job_script(
     if raw.is_absolute():
         path = raw.resolve()
     else:
-        path = (scripts_dir / raw).resolve()
+        # Build the candidate chain: profile dir first, then root fallback.
+        # The root fallback handles profile dirs that have been authored
+        # against the root install but lack a per-profile copy of a script
+        # (T1 of the 2026-08-16 telegram-themes plan; the recurring
+        # ``profiles/reviewer/scripts/`` finding). We track the matching
+        # scripts dir alongside the path so the path-traversal guard below
+        # always validates against the root that actually owns the script.
+        # The structure is ``<root>/profiles/<name>``: walk up until we
+        # find a ``profiles`` dir and use its parent as the root.
+        candidate = (scripts_dir / raw).resolve()
+        if not candidate.exists():
+            root_home = None
+            env_root = os.environ.get("HERMES_ROOT_HOME")
+            if env_root:
+                root_home = Path(env_root).resolve()
+            else:
+                # The on-disk structure is ``<root>/profiles/<name>``: the
+                # root is the grandparent of the profile home. Defensive
+                # walk-up falls back to whichever ancestor has a sibling
+                # ``profiles`` directory.
+                home = _get_hermes_home().resolve()
+                if (home.parent / "profiles").is_dir():
+                    root_home = home.parent.parent
+                else:
+                    cur = home
+                    while cur.parent != cur:
+                        if (cur.parent / "profiles").is_dir():
+                            root_home = cur.parent
+                            break
+                        cur = cur.parent
+            if root_home is not None:
+                root_candidate = (root_home / "scripts" / raw).resolve()
+                if root_candidate.exists():
+                    path = root_candidate
+                    scripts_dir_resolved = (root_home / "scripts").resolve()
+                else:
+                    path = candidate
+            else:
+                path = candidate
+        else:
+            path = candidate
 
     # Guard against path traversal, absolute path injection, and symlink
-    # escape — scripts MUST reside within HERMES_HOME/scripts/.
+    # escape — scripts MUST reside within their resolved scripts dir.
     try:
         path.relative_to(scripts_dir_resolved)
     except ValueError:
