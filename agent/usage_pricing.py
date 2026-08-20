@@ -807,6 +807,32 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
         source="official_docs_snapshot",
         pricing_version="minimax-pricing-2026-04",
     ),
+    # MiniMax M3 — added 2026-08-19 by self-audit. Active model.
+    # Rates mirror the M2.7 entry (per the official docs snapshot) plus
+    # the cache_read rate observed on the live M3 API in Phase 2.5.
+    # Cache creation has no published rate yet; treat as input-equivalent.
+    (
+        "minimax",
+        "minimax-m3",
+    ): PricingEntry(
+        input_cost_per_million=Decimal("0.30"),
+        output_cost_per_million=Decimal("1.20"),
+        cache_read_cost_per_million=Decimal("0.06"),
+        source="official_docs_snapshot",
+        source_url="https://docs.minimax.io/docs/api-reference/text-prompt-caching",
+        pricing_version="minimax-pricing-2026-08",
+    ),
+    (
+        "minimax-cn",
+        "minimax-m3",
+    ): PricingEntry(
+        input_cost_per_million=Decimal("0.30"),
+        output_cost_per_million=Decimal("1.20"),
+        cache_read_cost_per_million=Decimal("0.06"),
+        source="official_docs_snapshot",
+        source_url="https://docs.minimax.io/docs/api-reference/text-prompt-caching",
+        pricing_version="minimax-pricing-2026-08",
+    ),
     # Fireworks AI — serverless pricing for the models hermes typically routes
     # through when configured with provider="fireworks". Fireworks publishes a
     # cached_input rate per model alongside input/output, which maps to
