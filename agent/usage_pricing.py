@@ -810,7 +810,9 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
     # MiniMax M3 — added 2026-08-19 by self-audit. Active model.
     # Rates mirror the M2.7 entry (per the official docs snapshot) plus
     # the cache_read rate observed on the live M3 API in Phase 2.5.
-    # Cache creation has no published rate yet; treat as input-equivalent.
+    # Cache write rate verified 2026-08-19: MiniMax bills cache writes at
+    # input-equivalent (1.0x), unlike Anthropic's 1.25x convention. Source:
+    # https://platform.minimax.io/docs/guides/pricing-token-plan
     (
         "minimax",
         "minimax-m3",
@@ -818,8 +820,9 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
         input_cost_per_million=Decimal("0.30"),
         output_cost_per_million=Decimal("1.20"),
         cache_read_cost_per_million=Decimal("0.06"),
+        cache_write_cost_per_million=Decimal("0.30"),
         source="official_docs_snapshot",
-        source_url="https://docs.minimax.io/docs/api-reference/text-prompt-caching",
+        source_url="https://platform.minimax.io/docs/guides/pricing-token-plan",
         pricing_version="minimax-pricing-2026-08",
     ),
     (
@@ -829,8 +832,9 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
         input_cost_per_million=Decimal("0.30"),
         output_cost_per_million=Decimal("1.20"),
         cache_read_cost_per_million=Decimal("0.06"),
+        cache_write_cost_per_million=Decimal("0.30"),
         source="official_docs_snapshot",
-        source_url="https://docs.minimax.io/docs/api-reference/text-prompt-caching",
+        source_url="https://platform.minimax.io/docs/guides/pricing-token-plan",
         pricing_version="minimax-pricing-2026-08",
     ),
     # Fireworks AI — serverless pricing for the models hermes typically routes
