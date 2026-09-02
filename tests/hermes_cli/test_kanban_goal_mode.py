@@ -146,7 +146,7 @@ class TestCLIJudgeGate:
 
     def _run(self, monkeypatch, *, goal_mode=True, judge_available=True,
                  verdict="done", reason="", complete_ok=True, summary="done",
-                 metadata=None):
+                 metadata=None, accept_unproven=False):
             import argparse
             import types
             from unittest.mock import MagicMock
@@ -159,6 +159,7 @@ class TestCLIJudgeGate:
             )
             fake_conn = MagicMock()
             complete_calls: list = []
+            audit_events: list = []
 
             def fake_connect_closing():
                 from contextlib import contextmanager
@@ -171,10 +172,15 @@ class TestCLIJudgeGate:
                 complete_calls.append(tid)
                 return complete_ok
 
+            def fake_append_event(conn, tid, kind, payload=None, **kw):
+                audit_events.append((tid, kind, payload))
+
             monkeypatch.setattr("hermes_cli.kanban.kb.get_task", lambda conn, tid: fake_task)
             monkeypatch.setattr("hermes_cli.kanban.kb.complete_task", fake_complete_task)
+            monkeypatch.setattr("hermes_cli.kanban.kb._append_event", fake_append_event)
             monkeypatch.setattr("hermes_cli.kanban.kb.connect_closing", fake_connect_closing)
             monkeypatch.setattr("hermes_cli.kanban._worker_run_id_for", lambda _: None)
+            monkeypatch.setattr("hermes_cli.kanban._profile_author", lambda: "test-operator")
 
             _aux_client = (object(), "judge-model") if judge_available else (None, None)
             monkeypatch.setattr(
@@ -193,12 +199,12 @@ class TestCLIJudgeGate:
                 summary=summary,
                 result=None,
                 metadata=metadata,
-                accept_unproven=False,
+                accept_unproven=accept_unproven,
             )
-            return _cmd_complete(args), complete_calls
+            return _cmd_complete(args), complete_calls, audit_events
 
     def test_judge_rejects_premature_completion(self, monkeypatch):
-        rc, complete_calls = self._run(
+        rc, complete_calls, _ = self._run(
             monkeypatch, verdict="continue", reason="criteria not met"
         )
         assert rc != 0, "judge rejection must produce non-zero exit code"
@@ -221,7 +227,7 @@ class TestCLIJudgeGate:
         # Any id matching that pattern resolves through the patched
         # kb.get_task hook above (which always returns fake_task).
         metadata_json = json.dumps({"proof": ["t_deadbeefcafe"]})
-        rc, complete_calls = self._run(
+        rc, complete_calls, _ = self._run(
             monkeypatch,
             goal_mode=False,
             metadata=metadata_json,
@@ -236,7 +242,7 @@ class TestCLIJudgeGate:
         ``complete_task`` must never run and stderr must steer the user
         toward re-scoping / recording the block.
         """
-        rc, complete_calls = self._run(
+        rc, complete_calls, _ = self._run(
             monkeypatch,
             verdict="blocked",
             reason="the target repository does not exist",
@@ -246,3 +252,51 @@ class TestCLIJudgeGate:
         assert complete_calls == [], "an unachievable goal must never reach complete_task"
         assert "unachievable" in err.lower()
         assert "kanban block" in err.lower()
+
+    def test_non_goal_task_without_proof_is_rejected(self, monkeypatch):
+        rc, complete_calls, audit_events = self._run(
+            monkeypatch, goal_mode=False
+        )
+        assert rc != 0
+        assert complete_calls == []
+        assert audit_events == []
+
+    def test_accept_unproven_audits_only_after_success(self, monkeypatch):
+        rc, complete_calls, audit_events = self._run(
+            monkeypatch, goal_mode=False, accept_unproven=True
+        )
+        assert rc == 0
+        assert complete_calls == ["t1"]
+        assert audit_events == [
+            (
+                "t1",
+                "card_closed_without_proof",
+                {
+                    "reason": "operator used --accept-unproven",
+                    "accepted_by": "test-operator",
+                },
+            )
+        ]
+
+    def test_failed_accept_unproven_does_not_write_close_audit(self, monkeypatch):
+        rc, complete_calls, audit_events = self._run(
+            monkeypatch,
+            goal_mode=False,
+            accept_unproven=True,
+            complete_ok=False,
+        )
+        assert rc != 0
+        assert complete_calls == ["t1"]
+        assert audit_events == []
+
+    def test_accept_unproven_cannot_bypass_blocked_goal(self, monkeypatch):
+        rc, complete_calls, audit_events = self._run(
+            monkeypatch,
+            goal_mode=True,
+            accept_unproven=True,
+            verdict="blocked",
+            reason="the target repository does not exist",
+        )
+        assert rc != 0
+        assert complete_calls == []
+        assert audit_events == []

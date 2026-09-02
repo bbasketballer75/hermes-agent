@@ -134,6 +134,33 @@ def test_complete_happy_path(worker_env, tmp_path):
         conn.close()
 
 
+def test_complete_accept_unproven_records_audit(worker_env):
+    """The tool escape hatch closes a non-goal task and leaves a durable audit."""
+    from hermes_cli import kanban_db as kb
+    from tools import kanban_tools as kt
+
+    out = kt._handle_complete({
+        "summary": "operator accepted an unproven handoff",
+        "accept_unproven": True,
+    })
+    result = json.loads(out)
+    assert result["ok"] is True
+
+    conn = kb.connect()
+    try:
+        audit = [
+            event for event in kb.list_events(conn, worker_env)
+            if event.kind == "card_closed_without_proof"
+        ]
+        assert len(audit) == 1
+        assert audit[0].payload == {
+            "reason": "worker passed accept_unproven=True",
+            "accepted_by": "test-worker",
+        }
+    finally:
+        conn.close()
+
+
 def test_complete_retry_with_empty_created_cards_succeeds(worker_env, tmp_path):
     """After a phantom rejection, retrying kanban_complete with
     created_cards=[] (the documented escape hatch) must complete the
