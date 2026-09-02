@@ -85,36 +85,39 @@ def test_sample_memory_has_expected_keys_cross_platform() -> None:
 
 
 def test_sample_memory_psutil_path_matches_proc_shape(monkeypatch) -> None:
-    """Force the non-Linux branch even when actually running on Linux CI,
-    so this specific code path always gets exercised somewhere."""
+    """Exercise the psutil fallback without faking the host OS."""
+    from types import SimpleNamespace
+
     from gateway import lifecycle_ledger
 
-    monkeypatch.setattr(lifecycle_ledger.sys, "platform", "win32")
-    sample = lifecycle_ledger.sample_memory()
-    assert sample.get("rss_kib", 0) > 0
-    assert sample.get("mem_total_kib", 0) > 0
-    assert sample.get("mem_available_kib", 0) > 0
-    assert "swap_used_kib" in sample
+    fake_psutil = SimpleNamespace(
+        Process=lambda _pid: SimpleNamespace(
+            memory_info=lambda: SimpleNamespace(rss=1234 * 1024)
+        ),
+        virtual_memory=lambda: SimpleNamespace(
+            total=8192 * 1024,
+            available=4096 * 1024,
+        ),
+        swap_memory=lambda: SimpleNamespace(used=512 * 1024),
+    )
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+
+    assert lifecycle_ledger._sample_memory_psutil() == {
+        "rss_kib": 1234,
+        "mem_total_kib": 8192,
+        "mem_available_kib": 4096,
+        "swap_used_kib": 512,
+    }
 
 
 def test_sample_memory_psutil_missing_returns_empty_not_raises(monkeypatch) -> None:
     """psutil unavailable must degrade to {} like the old cross-platform
     default, never raise -- a forensics failure must not affect the
     gateway lifecycle it observes (module contract, see docstring)."""
-    import builtins
-
     from gateway import lifecycle_ledger
 
-    monkeypatch.setattr(lifecycle_ledger.sys, "platform", "win32")
-    real_import = builtins.__import__
-
-    def _blocked_import(name, *a, **kw):
-        if name == "psutil":
-            raise ImportError("simulated: psutil not installed")
-        return real_import(name, *a, **kw)
-
-    monkeypatch.setattr(builtins, "__import__", _blocked_import)
-    assert lifecycle_ledger.sample_memory() == {}
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    assert lifecycle_ledger._sample_memory_psutil() == {}
 
 
 # ---------------------------------------------------------------------------
