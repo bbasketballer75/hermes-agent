@@ -38,16 +38,16 @@ class BenchmarkAdapter:
     name: str                # e.g. "osworld2"
     version: str             # e.g. "v2.0 (2026-06)"
     task_count: int          # total tasks in the benchmark
-    
+
     def load_tasks(self, limit: int | None = None) -> list[Task]:
         """Return list of Task dataclasses with: id, prompt, env_setup, grader."""
         ...
-    
+
     def setup_environment(self, task: Task) -> str:
         """Provision the runtime (docker container, browser session, mock service).
         Returns an environment handle that run_agent() will receive."""
         ...
-    
+
     def run_agent(self, task: Task, env_handle: str, model: str = "default") -> AgentRun:
         """Run Hermes Agent on the task within env_handle. Returns AgentRun with:
         - trajectory (list of tool calls + responses)
@@ -57,7 +57,7 @@ class BenchmarkAdapter:
         - cost_usd
         - trace_id (for cross-referencing with observability backend)"""
         ...
-    
+
     def grade(self, task: Task, run: AgentRun) -> GraderResult:
         """Score the run. Returns GraderResult with score (0-1), reason, sub-scores."""
         ...
