@@ -2479,8 +2479,9 @@ def _cmd_complete(args: argparse.Namespace) -> int:
                     continue
             # Goal-mode judge gate (mirrors tools/kanban_tools.py). Apply it
             # to every terminal handoff so request-review cannot bypass the
-            # acceptance contract that protects complete.
-            task = kb.get_task(conn, tid)
+            # acceptance contract that protects complete. Reuse the task
+            # fetched above so the proof check, judge, and audit describe the
+            # same card state.
             gate_verdict, rejection = _goal_mode_handoff_rejection(
                 task,
                 (summary or args.result or "").strip(),
@@ -2504,21 +2505,6 @@ def _cmd_complete(args: argparse.Namespace) -> int:
                 failed.append(tid)
                 continue
 
-            # Audit trail for --accept-unproven overrides.
-            if task is not None and getattr(args, "accept_unproven", False) and not task.goal_mode:
-                try:
-                    kb._append_event(
-                        conn,
-                        tid,
-                        "card_closed_without_proof",
-                        {
-                            "reason": "operator used --accept-unproven",
-                            "accepted_by": _profile_author(),
-                        },
-                    )
-                except Exception:
-                    pass
-
             if not kb.complete_task(
                 conn, tid,
                 result=args.result,
@@ -2529,6 +2515,23 @@ def _cmd_complete(args: argparse.Namespace) -> int:
                 failed.append(tid)
                 print(f"cannot complete {tid} (unknown id or terminal state)", file=sys.stderr)
             else:
+                # Audit trail for --accept-unproven overrides.  Append it
+                # only after the task really completed: the database uses
+                # autocommit, so recording it first could falsely claim a
+                # closure when complete_task() refused the transition.
+                if task is not None and getattr(args, "accept_unproven", False) and not task.goal_mode:
+                    try:
+                        kb._append_event(
+                            conn,
+                            tid,
+                            "card_closed_without_proof",
+                            {
+                                "reason": "operator used --accept-unproven",
+                                "accepted_by": _profile_author(),
+                            },
+                        )
+                    except Exception:
+                        pass
                 print(f"Completed {tid}")
     return 0 if not failed else 1
 
