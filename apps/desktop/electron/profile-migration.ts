@@ -278,7 +278,25 @@ export function migrateActiveProfileIfMissing(desktopProfileConfigPath: string, 
     return false
   }
 
-  const legacyActive = readLegacyActiveProfile(deps.legacyActivePath, deps.readFileSync, deps.isValidProfileName)
+  const legacyActiveRaw = readLegacyActiveProfile(deps.legacyActivePath, deps.readFileSync, deps.isValidProfileName)
+
+  // The legacy file is a plain text sticky — any writer could have polluted it
+  // (CLI flag confusion like `--profile coder` producing `coder--`, copy-paste
+  // of a doc snippet, a hand edit, or a stale value pointing at a profile the
+  // user later deleted). readLegacyActiveProfile validates the regex shape
+  // only; it does NOT know whether the profile dir exists. Anything that
+  // passes regex but doesn't resolve to a real `profiles/<name>/` dir must not
+  // propagate into active-profile.json, because the next boot would try to
+  // spawn `hermes --profile <garbage> serve` and fail with "Profile
+  // \"<garbage>\" no longer exists." (assertLocalProfileCanStart in
+  // profile-delete-routing.ts:184). Downgrade such values to `undefined` so
+  // the heuristic rung below still runs.
+  const legacyActive =
+    !legacyActiveRaw ||
+    legacyActiveRaw === 'default' ||
+    !deps.existsSync(`${deps.profilesRoot}/${legacyActiveRaw}`)
+      ? undefined
+      : legacyActiveRaw
 
   const allProfiles = withDefaultCandidate(listProfileDirs(deps))
   const running = findRunningGatewayProfiles(deps.profilesRoot, allProfiles, deps)
