@@ -104,7 +104,7 @@ echo [6/8] running desktop tests...
 pushd "%REPO%\apps\desktop"
 call npm run test:desktop:platforms 2>>"%LOG%"
 if errorlevel 1 (
-  echo       warning: some platform tests failed on Windows (check log: %LOG%)
+  echo       warning: some platform tests failed on Windows ^(check log: %LOG%^)
 ) else (
   echo       done.
 )
@@ -126,11 +126,11 @@ popd
 
 pushd "%REPO%"
 git branch -u fork/main main >nul 2>&1
-git push fork main >nul 2>&1
+git push fork main --force-with-lease >nul 2>&1
 if errorlevel 1 (
-  echo   Fork:   could not push to fork (check network or credentials)
+  echo   Fork:   could not push to fork ^(check network or credentials^)
 ) else (
-  echo   Fork:   pushed to fork/main (bbasketballer75/hermes-agent)
+  echo   Fork:   pushed to fork/main ^(bbasketballer75/hermes-agent^)
 )
 popd
 
