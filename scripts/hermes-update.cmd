@@ -56,10 +56,10 @@ git fetch fork 2>nul
 echo       done.
 
 REM ===========================================================================
-REM  Step 3: checkout chore/update-with-local-fixes from origin/main
+REM  Step 3: checkout main from origin/main
 REM ===========================================================================
-echo [3/8] checking out chore/update-with-local-fixes branch from origin/main...
-git checkout -B chore/update-with-local-fixes origin/main
+echo [3/8] checking out main branch from origin/main...
+git checkout -B main origin/main
 if errorlevel 1 (
   echo       FAILED to create or check out branch.
   popd
@@ -67,7 +67,7 @@ if errorlevel 1 (
 )
 REM Ensure updater scripts are present in repo
 copy /y "%~dp0*.*" "%ORIG_SCRIPTS_DIR%\" >nul
-echo       on branch: chore/update-with-local-fixes
+echo       on branch: main
 popd
 
 REM ===========================================================================
@@ -129,7 +129,7 @@ REM  Step 8: report results
 REM ===========================================================================
 echo.
 echo === Update complete ===
-echo   Branch: chore/update-with-local-fixes
+echo   Branch: main
 echo   Pins:   %PIN%
 echo   Log:    %LOG%
 echo.
