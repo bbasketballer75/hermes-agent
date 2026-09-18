@@ -124,9 +124,16 @@ if errorlevel 1 (
 echo       done.
 popd
 
-REM ===========================================================================
-REM  Step 8: report results
-REM ===========================================================================
+pushd "%REPO%"
+git branch -u fork/main main >nul 2>&1
+git push fork main >nul 2>&1
+if errorlevel 1 (
+  echo   Fork:   could not push to fork (check network or credentials)
+) else (
+  echo   Fork:   pushed to fork/main (bbasketballer75/hermes-agent)
+)
+popd
+
 echo.
 echo === Update complete ===
 echo   Branch: main
