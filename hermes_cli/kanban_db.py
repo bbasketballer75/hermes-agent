@@ -2715,7 +2715,8 @@ def complete_task(
                        block_kind   = NULL,
                        block_recurrences = 0
                  WHERE id = ?
-                   AND status IN ('running', 'ready', 'blocked', 'review')
+                   AND status IN ('running', 'ready', 'blocked', 'review',
+                                    'in_progress', 'scheduled', 'triage')
                 """
         params: tuple = (result, now, task_id)
         if expected_run_id is not None:
