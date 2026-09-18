@@ -53,13 +53,35 @@ def current_branch(repo: Path) -> str:
     return proc.stdout.strip()
 
 
-def tip_already_applied(sha: str, repo: Path) -> bool:
-    """True if sha is reachable from HEAD."""
+def tip_already_applied(sha: str, repo: Path) -> tuple[bool, str]:
+    """Check if sha is reachable from HEAD or if its patch is already present in HEAD.
+
+    Returns (already_applied, reason).
+    """
+    # 1. Direct ancestor check (exact commit SHA in history)
     proc = subprocess.run(
         ["git", "-C", str(repo), "merge-base", "--is-ancestor", sha, "HEAD"],
         capture_output=True, text=True,
     )
-    return proc.returncode == 0
+    if proc.returncode == 0:
+        return True, "ancestor"
+
+    # 2. Patch-id equivalence check via git cherry
+    # git cherry HEAD <sha> <sha>^ outputs:
+    #   '' or '- <sha>' if equivalent patch/diff is already in HEAD
+    #   '+ <sha>' if patch is not in HEAD
+    cherry = subprocess.run(
+        ["git", "-C", str(repo), "cherry", "HEAD", sha, f"{sha}^"],
+        capture_output=True, text=True,
+    )
+    if cherry.returncode == 0:
+        out = cherry.stdout.strip()
+        if not out:
+            return True, "ancestor"
+        if out.startswith("-"):
+            return True, "patch-id match (merged upstream)"
+
+    return False, ""
 
 
 def main() -> int:
@@ -103,8 +125,10 @@ def main() -> int:
             skipped += 1
             continue
 
-        if tip_already_applied(sha, args.repo):
-            print(f"  already applied: {sha[:11]}  ({note})")
+        applied_already, reason = tip_already_applied(sha, args.repo)
+        if applied_already:
+            reason_str = f" [{reason}]" if reason else ""
+            print(f"  already applied: {sha[:11]}{reason_str}  ({note})")
             already += 1
             continue
 
