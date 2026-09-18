@@ -210,10 +210,7 @@ test('appendUniquePathEntries is case-insensitive and trailing-separator insensi
   // Trailing separator variants of the same dir must dedupe (was: produced
   // 4 trailing-backslash duplicates in this user's Windows registry PATH).
   assert.equal(
-    appendUniquePathEntries(
-      ['C:\\Foo', 'C:\\Foo\\', 'C:\\Foo\\\\', ['C:\\foo', 'C:\\FOO']],
-      { delimiter: ';' }
-    ),
+    appendUniquePathEntries(['C:\\Foo', 'C:\\Foo\\', 'C:\\Foo\\\\', ['C:\\foo', 'C:\\FOO']], { delimiter: ';' }),
     'C:\\Foo'
   )
 
@@ -227,14 +224,8 @@ test('appendUniquePathEntries is case-insensitive and trailing-separator insensi
   )
 
   // Non-duplicate entries still pass through
-  assert.equal(
-    appendUniquePathEntries(['C:\\A', 'C:\\B', 'c:\\a'], { delimiter: ';' }),
-    'C:\\A;C:\\B'
-  )
+  assert.equal(appendUniquePathEntries(['C:\\A', 'C:\\B', 'c:\\a'], { delimiter: ';' }), 'C:\\A;C:\\B')
 
   // Empty entries are still dropped
-  assert.equal(
-    appendUniquePathEntries(['', 'C:\\X', '', 'C:\\x'], { delimiter: ';' }),
-    'C:\\X'
-  )
+  assert.equal(appendUniquePathEntries(['', 'C:\\X', '', 'C:\\x'], { delimiter: ';' }), 'C:\\X')
 })

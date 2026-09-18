@@ -58,7 +58,9 @@ function appendUniquePathEntries(entries, { delimiter = path.delimiter } = {}) {
       if (!part) {
         continue
       }
+
       const key = norm(part)
+
       if (seen.has(key)) {
         continue
       }
