@@ -1,0 +1,61 @@
+{
+  "_comment": "Per-commit pin file for scripts\\hermes-update.cmd. action='keep' means re-apply after the update; action='push' means commit was already pushed to fork upstream (skip the cherry-pick); action='discard' means commit is no longer needed (already in upstream main).",
+  "assume_yes": false,
+  "commits": [
+    {
+      "sha": "e126a65311",
+      "action": "keep",
+      "note": "fix(desktop/tips): retire local-runtime-update tip when dismissed or Update now is clicked (file deleted upstream; obsolete on fork)"
+    },
+    {
+      "sha": "15d6592aff",
+      "action": "keep",
+      "note": "fix(windows): quote PowerShell commands for outer Bash wrapper, fix MSYS controls and Path.home fallback"
+    },
+    {
+      "sha": "d8ea24bcbb",
+      "action": "keep",
+      "note": "test(config): pass force=True in tmp helper for schema validator compatibility"
+    },
+    {
+      "sha": "ce14191bf3",
+      "action": "keep",
+      "note": "fix(relay): tolerate stale-handle pop in pop_relay_scope"
+    },
+    {
+      "sha": "e3892eb99b",
+      "action": "keep",
+      "note": "fix(kanban): accept in_progress/scheduled/triage in complete_task gates"
+    },
+    {
+      "sha": "ec0b6b154c",
+      "action": "keep",
+      "note": "fix(config): preserve YAML formatting on `hermes config set`"
+    },
+    {
+      "sha": "6900a6edcc",
+      "action": "push",
+      "note": "feat(auth): authority profile - production / principal toggle"
+    },
+    {
+      "sha": "5ca6e0a149",
+      "action": "keep",
+      "note": "fix(windows): postinstall emoji encoding + pin browserslist/baseline-browser-mapping overrides"
+    },
+    {
+      "sha": "ecd2c08869",
+      "action": "keep",
+      "note": "test(write_file): regression coverage for duplicate-drive-prefix guard"
+    },
+    {
+      "sha": "c16d50e6d5",
+      "action": "keep",
+      "note": "test: case-insensitive + trailing-separator dedup coverage for appendUniquePathEntries"
+    },
+    {
+      "sha": "ea05a7e6e4",
+      "action": "keep",
+      "note": "fix: PATH pollution - case-insensitive + trailing-separator dedup; break persistence loop"
+    }
+  ]
+}
