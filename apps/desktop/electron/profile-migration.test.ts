@@ -685,3 +685,83 @@ test('migrateActiveProfileIfMissing leaves a still-correct heuristic pin alone',
   assert.equal(migrateActiveProfileIfMissing('/cfg/active-profile.json', deps), false)
   assert.equal(written, null)
 })
+
+test('migrateActiveProfileIfMissing rejects a corrupted legacy value whose profile dir does not exist', () => {
+  // Regression: the legacy file at ~/.hermes/active_profile is plain text and any
+  // writer can pollute it. A user reported `coder--` after a CLI flag was
+  // captured literally (`hermes profile use --profile coder` storing the
+  // leading `--` somewhere along the path). `coder--` passes the regex
+  // validator in readLegacyActiveProfile (hyphens are allowed) but no
+  // profiles/coder--/ dir exists, so the orchestrator must NOT propagate it to
+  // active-profile.json — otherwise the next boot fails with "Profile \"coder--\"
+  // no longer exists." (assertLocalProfileCanStart in profile-delete-routing.ts).
+  // Falls through to the heuristic rung instead.
+  let written: unknown = null
+
+  const fs = makeFs({
+    '/home/u/.hermes/active_profile': { content: 'coder--\n' },
+    '/home/u/.hermes/profiles/coder': { dir: true },
+    '/home/u/.hermes/profiles/coder/state.db': { size: 50 * 1024 * 1024, mtime: NOW - 86_400_000 },
+    '/home/u/.hermes/profiles/writer': { dir: true },
+    '/home/u/.hermes/profiles/writer/state.db': { size: 200 * 1024 * 1024, mtime: NOW - 86_400_000 }
+  })
+
+  const deps = baseDeps({
+    ...fs,
+    writeJson: (_p: string, payload: unknown) => {
+      written = payload
+    }
+  })
+
+  // Returns true (a write happened) but the value is the heuristic pick, NOT
+  // the corrupted legacy value.
+  assert.equal(migrateActiveProfileIfMissing('/cfg/active-profile.json', deps), true)
+  assert.deepEqual(written, { profile: 'writer', _migrated: true })
+})
+
+test('migrateActiveProfileIfMissing rejects a legacy value whose profile dir was deleted after selection', () => {
+  // A user explicitly selected profile X via `hermes profile use X` (so the
+  // legacy file has X), then later deleted X. The legacy value is now stale —
+  // the regex still accepts it, but the dir is gone. Must not propagate; fall
+  // through to the heuristic rung so the user isn't locked into a vanished
+  // profile on the next first-boot-style re-evaluation.
+  let written: unknown = null
+
+  const fs = makeFs({
+    '/home/u/.hermes/active_profile': { content: 'deleted_profile\n' },
+    '/home/u/.hermes/profiles/coder': { dir: true },
+    '/home/u/.hermes/profiles/coder/state.db': { size: 50 * 1024 * 1024, mtime: NOW - 86_400_000 }
+  })
+
+  const deps = baseDeps({
+    ...fs,
+    writeJson: (_p: string, payload: unknown) => {
+      written = payload
+    }
+  })
+
+  assert.equal(migrateActiveProfileIfMissing('/cfg/active-profile.json', deps), true)
+  assert.deepEqual(written, { profile: 'coder', _migrated: true })
+})
+
+test('migrateActiveProfileIfMissing accepts a legacy value when the profile dir exists', () => {
+  // Positive control: a clean legacy value + matching dir propagates through.
+  let written: unknown = null
+
+  const fs = makeFs({
+    '/home/u/.hermes/active_profile': { content: 'coder\n' },
+    '/home/u/.hermes/profiles/coder': { dir: true },
+    '/home/u/.hermes/profiles/writer': { dir: true },
+    '/home/u/.hermes/profiles/writer/state.db': { size: 500 * 1024 * 1024, mtime: NOW - 86_400_000 }
+  })
+
+  const deps = baseDeps({
+    ...fs,
+    writeJson: (_p: string, payload: unknown) => {
+      written = payload
+    }
+  })
+
+  assert.equal(migrateActiveProfileIfMissing('/cfg/active-profile.json', deps), true)
+  assert.deepEqual(written, { profile: 'coder' })
+})
