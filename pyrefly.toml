@@ -2,3 +2,7 @@
 preset = "basic"
 search-path = ["."]
 python-interpreter-path = "venv/Scripts/python.exe"
+project-excludes = [
+    "**/__pyrefly_virtual__/**",
+    "*__pyrefly_virtual__*"
+]
