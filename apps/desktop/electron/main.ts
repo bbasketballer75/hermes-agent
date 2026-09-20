@@ -1986,6 +1986,14 @@ function rememberLog(chunk) {
   scheduleDesktopLogFlush()
 }
 
+// Prevent unhandled EPIPE crash if stdout/stderr pipe closes (e.g. detached GUI on Windows)
+process.stdout?.on?.('error', (err: any) => {
+  if (err?.code === 'EPIPE') return
+})
+process.stderr?.on?.('error', (err: any) => {
+  if (err?.code === 'EPIPE') return
+})
+
 installCrashForensics({ flush: flushDesktopLogBufferSync, log: rememberLog })
 
 // A rejected loadURL leaves a blank window and, unhandled, no trace anywhere
