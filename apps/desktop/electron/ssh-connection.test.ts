@@ -93,7 +93,7 @@ test('controlSocketPath is stable, short, and host-distinct', () => {
   assert.equal(a, a2, 'same triple → same socket (ControlMaster reuse)')
   assert.notEqual(a, b, 'different host → different socket')
   // 16 hex chars + .sock keeps the basename short for sun_path 104-byte limit
-  assert.match(a, /\/[0-9a-f]{16}\.sock$/)
+  assert.match(a, /[/\\][0-9a-f]{16}\.sock$/)
 })
 
 test('controlSocketPath default base stays under sun_path even with the temp-listener suffix', () => {
@@ -926,7 +926,7 @@ test('runSsh delivers stdinData to the child and does not log it', async () => {
   assert.equal(stdinWritten, 'secret-token-value', 'stdinData must be written to child.stdin')
 })
 
-test('open() rejects a control-dir that is a symlink', async () => {
+test.skipIf(process.platform === 'win32')('open() rejects a control-dir that is a symlink', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-test-'))
   const real = path.join(tmp, 'real')
   const link = path.join(tmp, 'link')

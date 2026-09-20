@@ -66,8 +66,10 @@ export function normalizeRepoScanPath(rawPath: string, options: RepoScanPathOpti
     expanded = pathApi.join(homeDir, raw.slice(2))
   }
 
-  const absolute = pathApi.isAbsolute(expanded) ? expanded : pathApi.resolve(homeDir, expanded)
-  const value = pathApi.normalize(absolute)
+  const isWindowsDrive = /^[a-zA-Z]:[\\\/]/.test(expanded)
+  const isAbs = pathApi.isAbsolute(expanded) || isWindowsDrive
+  const absolute = isAbs ? expanded : pathApi.resolve(homeDir, expanded)
+  const value = isWindowsDrive ? path.win32.normalize(absolute) : pathApi.normalize(absolute)
   const key = platform === 'win32' ? value.toLocaleLowerCase('en-US') : value
 
   return { key, value }

@@ -622,7 +622,7 @@ class SshConnection {
     // on Win32) — fall back to one ssh invocation per operation and a
     // persistent `ssh -N -L` child per tunnel. Empty controlPath routes the
     // pure builders onto their no-mux form.
-    this._mux = opts.mux ?? process.platform !== 'win32'
+    this._mux = opts.mux ?? (opts.controlDir !== undefined ? true : process.platform !== 'win32')
     this.controlPath = this._mux
       ? controlSocketPath(this.user, this.host, this.port, opts.controlDir, {
           keyPath: this.keyPath,

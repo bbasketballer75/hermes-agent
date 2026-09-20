@@ -36,7 +36,7 @@ test('collectSshConfigHosts follows Include directives (read-only)', () => {
 
   const hosts = collectSshConfigHosts('/home/u/.ssh/config', {
     homeDir: '/home/u',
-    readFile: p => files[p] ?? null
+    readFile: p => files[p.replace(/\\/g, '/')] ?? null
   })
 
   assert.deepEqual(hosts.sort(), ['deep', 'home-abs', 'main', 'work-box'].sort())
@@ -54,7 +54,7 @@ test('collectSshConfigHosts does not loop on a self-include cycle', () => {
 
   const hosts = collectSshConfigHosts('/home/u/.ssh/config', {
     homeDir: '/home/u',
-    readFile: p => files[p] ?? null
+    readFile: p => files[p.replace(/\\/g, '/')] ?? null
   })
 
   assert.deepEqual(hosts.sort(), ['a', 'b'])
@@ -69,9 +69,9 @@ test('collectSshConfigHosts expands globbed includes via injected globSync', () 
 
   const hosts = collectSshConfigHosts('/home/u/.ssh/config', {
     homeDir: '/home/u',
-    readFile: p => files[p] ?? null,
+    readFile: p => files[p.replace(/\\/g, '/')] ?? null,
     globSync: pattern =>
-      pattern.endsWith('config.d/*') ? ['/home/u/.ssh/config.d/10-work', '/home/u/.ssh/config.d/20-home'] : [pattern]
+      pattern.replace(/\\/g, '/').endsWith('config.d/*') ? ['/home/u/.ssh/config.d/10-work', '/home/u/.ssh/config.d/20-home'] : [pattern]
   })
 
   assert.deepEqual(hosts.sort(), ['home', 'root', 'work'].sort())
