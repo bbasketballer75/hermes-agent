@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.electron.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": "../build/electron-types"
+  },
+  "include": [
+    "./**/*",
+    "../../shared/src/ansi.ts",
+    "../../shared/src/data-url-read-max.ts",
+    "../../shared/src/translucency.ts"
+  ],
+  "exclude": [
+    "**/*.e2e.mts"
+  ]
+}
