@@ -1,0 +1,4 @@
+# Pyrefly configuration for Hermes Agent
+preset = "basic"
+search-path = ["."]
+python-interpreter-path = "venv/Scripts/python.exe"
