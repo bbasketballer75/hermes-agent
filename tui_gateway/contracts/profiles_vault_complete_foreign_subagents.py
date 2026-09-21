@@ -162,6 +162,7 @@ class ProfileRow(Result):
     ui_meta_revisions: dict[str, int] = Field(default_factory=dict)
     ui_meta: dict[str, JsonValue] | None = None
     has_avatar: bool = False
+    previous_names: list[str] = Field(default_factory=list)
 
 
 class ProfilesListParams(ProfileParams):
