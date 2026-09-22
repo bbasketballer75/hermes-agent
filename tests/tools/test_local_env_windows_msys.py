@@ -437,6 +437,25 @@ class TestWindowsPowerShellQuoting:
         assert tokens[0] == r"C:\Program Files\PowerShell\7\pwsh.exe"
         assert tokens[-1] == "echo $env:TEMP"
 
+    @pytest.mark.parametrize("prefix", [
+        "gsudo",
+        "gsudo -w",
+        "gsudo --new -w",
+        "gsudo -d",
+        "gsudo --integrity High",
+        "gsudo -u Administrator",
+        "sudo",
+    ])
+    def test_elevation_wrappers_preserve_powershell_payload(self, prefix):
+        """gsudo and sudo wrappers must have their PowerShell command payload
+        safely single-quoted for outer Bash eval."""
+        quoted = local_mod._quote_windows_powershell_command(
+            f'{prefix} pwsh -Command "echo $env:TEMP"'
+        )
+        assert quoted is not None, prefix
+        tokens = self._roundtrip(quoted)
+        assert tokens[-1] == "echo $env:TEMP"
+
 
 class TestPrepareCommandWindowsGate:
     """LocalEnvironment._prepare_command applies the rewrite only on Windows."""
@@ -535,6 +554,74 @@ class TestWindowsPathNormalization:
             r"cp C:\foo\bar.txt D:\baz\qux.txt",
             "cp C:/foo/bar.txt D:/baz/qux.txt",
         ),
+        # POSIX drive path conversions
+        (
+            "python /c/Users/bbask/foo.py",
+            "python C:/Users/bbask/foo.py",
+        ),
+        (
+            "powershell -File /c/test.ps1",
+            "powershell -File C:/test.ps1",
+        ),
+        (
+            "git worktree add /c/Users/bbask/wt",
+            "git worktree add C:/Users/bbask/wt",
+        ),
+        (
+            'cat "/c/Users/bbask/test.txt"',
+            'cat "C:/Users/bbask/test.txt"',
+        ),
+        (
+            "ls /cygdrive/c/Users/bbask",
+            "ls C:/Users/bbask",
+        ),
+        (
+            "ls /mnt/d/Projects",
+            "ls D:/Projects",
+        ),
+        # CLI switches and URLs that must remain untouched
+        (
+            "cmd /c 'echo hello'",
+            "cmd /c 'echo hello'",
+        ),
+        (
+            "taskkill /f /pid 1234",
+            "taskkill /f /pid 1234",
+        ),
+        (
+            "curl https://example.com/c/api/v1",
+            "curl https://example.com/c/api/v1",
+        ),
+        (
+            "dir /s /b",
+            "dir /s /b",
+        ),
+        # Trailing backslash before closing double quote (fixes unexpected EOF)
+        (
+            r'ls -la "C:\Users\bbask\cron\output\7535423aabeb\"',
+            'ls -la "C:/Users/bbask/cron/output/7535423aabeb/"',
+        ),
+        (
+            r'ls -la "cron\output\"',
+            'ls -la "cron/output/"',
+        ),
+        (
+            r'ls -la ".\dist\"',
+            'ls -la "./dist/"',
+        ),
+        # Multi-segment relative paths containing backslashes
+        (
+            r'cat "subfolder\nested\file.txt"',
+            'cat "subfolder/nested/file.txt"',
+        ),
+        (
+            r"cat 'subfolder\nested\file.txt'",
+            "cat 'subfolder/nested/file.txt'",
+        ),
+        (
+            r"python tests\tools\test_local.py",
+            "python tests/tools/test_local.py",
+        ),
     ])
     def test_path_normalization_rules(self, cmd, expected):
         assert local_mod._normalize_windows_paths_in_command(cmd) == expected
@@ -550,6 +637,16 @@ class TestWindowsPathNormalization:
             r"powershell -File C:\ProgramData\MediaFlowLocalDns\enable_filter_49_local.ps1"
         )
         assert cmd == "powershell -File C:/ProgramData/MediaFlowLocalDns/enable_filter_49_local.ps1"
+
+    def test_prepare_command_normalizes_posix_paths_on_windows(self, monkeypatch):
+        monkeypatch.setattr(local_mod, "_IS_WINDOWS", True)
+        monkeypatch.setattr(
+            BaseEnvironment, "_prepare_command",
+            lambda self, command: (command, None),
+        )
+        env = LocalEnvironment.__new__(LocalEnvironment)
+        cmd, _ = env._prepare_command("python /c/Users/bbask/foo.py")
+        assert cmd == "python C:/Users/bbask/foo.py"
 
     def test_prepare_command_noop_on_posix(self, monkeypatch):
         monkeypatch.setattr(local_mod, "_IS_WINDOWS", False)

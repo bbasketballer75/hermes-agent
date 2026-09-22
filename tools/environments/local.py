@@ -455,6 +455,12 @@ def strip_launch_profile_env(env: dict, target_home: "str | Path | None" = None)
 _WINDOWS_POWERSHELL_EXES = frozenset(
     {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
 )
+_WINDOWS_ELEVATION_EXES = frozenset(
+    {"gsudo", "gsudo.exe", "sudo", "sudo.exe"}
+)
+_WINDOWS_ELEVATION_VALUE_FLAGS = frozenset(
+    {"-i", "--integrity", "-u", "--user", "--loglevel", "--chdir"}
+)
 _BASH_TOP_LEVEL_PUNCTUATION = frozenset(";&|<>(){}[]#")
 _BASH_UNQUOTED_EXPANSION_CHARS = frozenset("$`*?~\\")
 _POWERSHELL_COMMAND_SWITCH_NAMES = frozenset(
@@ -592,10 +598,10 @@ def _quote_windows_powershell_command(command: str) -> str | None:
 
     Hermes normally wraps local commands in ``bash -c`` and a later ``eval``.
     Bash otherwise expands PowerShell expressions such as ``$_.Path`` and
-    ``$env:TEMP`` before PowerShell sees them. This recognizes only a simple,
-    standalone pwsh/powershell invocation and rebuilds each parsed argv token
-    with Bash-safe quoting. Ambiguous shell syntax stays on the existing Bash
-    path unchanged.
+    ``$env:TEMP`` before PowerShell sees them. This recognizes a simple,
+    standalone pwsh/powershell invocation (including when wrapped in gsudo or
+    sudo) and rebuilds each parsed argv token with Bash-safe quoting. Ambiguous
+    shell syntax stays on the existing Bash path unchanged.
     """
     stripped = command.strip()
     if not stripped or "\n" in stripped or "\r" in stripped:
@@ -613,14 +619,35 @@ def _quote_windows_powershell_command(command: str) -> str | None:
     if not tokens:
         return None
 
-    exe_name = ntpath.basename(tokens[0]).lower()
+    ps_token_index = 0
+    first_token = ntpath.basename(tokens[0]).lower()
+    if first_token in _WINDOWS_ELEVATION_EXES:
+        i = 1
+        while i < len(tokens):
+            t = tokens[i]
+            t_lower = t.lower()
+            if t_lower in _WINDOWS_ELEVATION_VALUE_FLAGS:
+                i += 2
+                continue
+            if t_lower.startswith("-"):
+                i += 1
+                continue
+            ps_token_index = i
+            break
+        if ps_token_index == 0 or ps_token_index >= len(tokens):
+            return None
+
+    exe_name = ntpath.basename(tokens[ps_token_index]).lower()
     if exe_name not in _WINDOWS_POWERSHELL_EXES:
         return None
 
-    command_start = _powershell_command_payload_start(tokens)
+    rel_command_start = _powershell_command_payload_start(tokens[ps_token_index:])
+    if rel_command_start is None:
+        return None
+    command_start = ps_token_index + rel_command_start
+
     if expanding_words and (
-        command_start is None
-        or any(word_index < command_start for word_index in expanding_words)
+        any(word_index < command_start for word_index in expanding_words)
     ):
         return None
 
@@ -632,13 +659,19 @@ def _quote_windows_powershell_command(command: str) -> str | None:
 
 
 def _normalize_windows_paths_in_command(command: str) -> str:
-    """Normalize Windows backslash paths to forward slashes in command strings.
+    """Normalize Windows backslash and POSIX-drive paths to forward slashes.
 
     In Git Bash on Windows, terminal commands run inside an ``eval '{escaped}'``
     block. In Bash word-parsing, unquoted backslashes are treated as escape
     characters and stripped, corrupting paths such as
     ``C:\\ProgramData\\MediaFlowLocalDns\\script.ps1`` into
-    ``C:ProgramDataMediaFlowLocalDnsscript.ps1``.
+    ``C:ProgramDataMediaFlowLocalDnsscript.ps1``. Trailing backslashes before
+    closing quotes (e.g. ``"dir\\"``) escape the quote and crash Bash with
+    ``unexpected EOF while looking for matching '"'``.
+
+    Additionally, with ``MSYS_NO_PATHCONV=1``, POSIX drive paths (``/c/...``)
+    passed to native Windows binaries (python, powershell, git, node) are treated
+    literally as ``C:\\c\\...`` or rejected as invalid arguments.
 
     Windows Win32 APIs (CreateFileW), PowerShell, Python, Node, Git, etc.
     natively support forward slashes. In Bash, forward slashes are path
@@ -651,25 +684,46 @@ def _normalize_windows_paths_in_command(command: str) -> str:
         return match.group(1) + match.group(2).replace("\\", "/")
 
     def repl_double_quoted(match: re.Match) -> str:
-        return '"' + match.group(1).replace("\\", "/") + '"'
+        return match.group(1) + '"' + match.group(2).replace("\\", "/") + '"'
 
     def repl_single_quoted(match: re.Match) -> str:
-        return "'" + match.group(1).replace("\\", "/") + "'"
+        return match.group(1) + "'" + match.group(2).replace("\\", "/") + "'"
 
-    # 1. Double-quoted drive and relative paths: "C:\foo\bar" or ".\foo\bar"
-    cmd = re.sub(r'"([a-zA-Z]:\\[^"\r\n]*)"', repl_double_quoted, command)
-    cmd = re.sub(r'"(\.{1,2}\\[^"\r\n]*)"', repl_double_quoted, cmd)
+    def repl_posix_drive(match: re.Match) -> str:
+        prefix = match.group(1)
+        drive_letter = match.group(2).upper()
+        tail = match.group(3) or ""
+        return f"{prefix}{drive_letter}:{tail}"
 
-    # 2. Single-quoted drive and relative paths: 'C:\foo\bar' or '.\foo\bar'
-    cmd = re.sub(r"'([a-zA-Z]:\\[^'\r\n]*)'", repl_single_quoted, cmd)
-    cmd = re.sub(r"'(\.{1,2}\\[^'\r\n]*)'", repl_single_quoted, cmd)
+    # 1. POSIX drive paths: /c/..., /cygdrive/c/..., /mnt/c/... -> C:/...
+    # Must be preceded by start of line, whitespace, or shell delimiters
+    # and followed by '/' and path characters (never CLI flags like 'cmd /c')
+    posix_pattern = re.compile(
+        r'(^|[\s"\'=,;(])/(?:(?:cygdrive|mnt)/)?([a-zA-Z])(/[^"\'\r\n\t;&|<>(){}`]*)'
+    )
+    cmd = posix_pattern.sub(repl_posix_drive, command)
 
-    # 3. Unquoted drive and relative paths (stop at whitespace or shell delimiters)
+    # 2. Double-quoted paths containing backslashes:
+    # 2a. Drive paths: "C:\foo\bar" or "C:\foo\bar\"
+    cmd = re.sub(r'(^|[\s=,;(])"([a-zA-Z]:\\[^"\r\n]*)"', repl_double_quoted, cmd)
+    # 2b. Dot-relative paths: ".\foo\bar", "..\foo\bar", ".\dist\"
+    cmd = re.sub(r'(^|[\s=,;(])"(\.{1,2}\\[^"\r\n]*)"', repl_double_quoted, cmd)
+    # 2c. Multi-segment relative directory/path: "cron\output\", "sub\folder\file.txt"
+    cmd = re.sub(r'(^|[\s=,;(])"([a-zA-Z0-9_.~-]+\\[a-zA-Z0-9_.~-]+\\[^"\r\n]*)"', repl_double_quoted, cmd)
+
+    # 3. Single-quoted paths containing backslashes:
+    cmd = re.sub(r"(^|[\s=,;(])'([a-zA-Z]:\\[^'\r\n]*)'", repl_single_quoted, cmd)
+    cmd = re.sub(r"(^|[\s=,;(])'(\.{1,2}\\[^'\r\n]*)'", repl_single_quoted, cmd)
+    cmd = re.sub(r"(^|[\s=,;(])'([a-zA-Z0-9_.~-]+\\[a-zA-Z0-9_.~-]+\\[^'\r\n]*)'", repl_single_quoted, cmd)
+
+    # 4. Unquoted paths containing backslashes (stop at whitespace or shell delimiters)
     unquoted_drive = re.compile(r'(^|[\s=,;(])([a-zA-Z]:\\[^\s"\'\r\n\t;&|<>(){}`]*)')
-    unquoted_rel = re.compile(r'(^|[\s=,;(])(\.{1,2}\\[^\s"\'\r\n\t;&|<>(){}`]*)')
+    unquoted_dot_rel = re.compile(r'(^|[\s=,;(])(\.{1,2}\\[^\s"\'\r\n\t;&|<>(){}`]*)')
+    unquoted_multi_rel = re.compile(r'(^|[\s=,;(])([a-zA-Z0-9_.~-]+\\[a-zA-Z0-9_.~-]+\\[^\s"\'\r\n\t;&|<>(){}`]*)')
 
     cmd = unquoted_drive.sub(repl_unquoted, cmd)
-    cmd = unquoted_rel.sub(repl_unquoted, cmd)
+    cmd = unquoted_dot_rel.sub(repl_unquoted, cmd)
+    cmd = unquoted_multi_rel.sub(repl_unquoted, cmd)
     return cmd
 
 
