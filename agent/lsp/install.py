@@ -123,7 +123,7 @@ def _existing_binary(name: str, *, is_windows: Optional[bool] = None) -> Optiona
     ``is_windows`` overrides the host check so the Windows resolution is testable as data on every lane.
     """
     win = _is_windows() if is_windows is None else is_windows
-    bases = [hermes_lsp_bin_dir() / name] + ([_npm_bin_dir() / name] if win else [])
+    bases = ([_npm_bin_dir() / name] if win else []) + [hermes_lsp_bin_dir() / name]
     if win:
         for s in _WINDOWS_WRAPPER_SUFFIXES:
             for base in bases:
