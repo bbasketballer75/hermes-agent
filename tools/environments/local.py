@@ -631,6 +631,48 @@ def _quote_windows_powershell_command(command: str) -> str | None:
     return " ".join(rebuilt)
 
 
+def _normalize_windows_paths_in_command(command: str) -> str:
+    """Normalize Windows backslash paths to forward slashes in command strings.
+
+    In Git Bash on Windows, terminal commands run inside an ``eval '{escaped}'``
+    block. In Bash word-parsing, unquoted backslashes are treated as escape
+    characters and stripped, corrupting paths such as
+    ``C:\\ProgramData\\MediaFlowLocalDns\\script.ps1`` into
+    ``C:ProgramDataMediaFlowLocalDnsscript.ps1``.
+
+    Windows Win32 APIs (CreateFileW), PowerShell, Python, Node, Git, etc.
+    natively support forward slashes. In Bash, forward slashes are path
+    separators and never treated as escape characters, surviving eval intact.
+    """
+    if not command:
+        return command
+
+    def repl_unquoted(match: re.Match) -> str:
+        return match.group(1) + match.group(2).replace("\\", "/")
+
+    def repl_double_quoted(match: re.Match) -> str:
+        return '"' + match.group(1).replace("\\", "/") + '"'
+
+    def repl_single_quoted(match: re.Match) -> str:
+        return "'" + match.group(1).replace("\\", "/") + "'"
+
+    # 1. Double-quoted drive and relative paths: "C:\foo\bar" or ".\foo\bar"
+    cmd = re.sub(r'"([a-zA-Z]:\\[^"\r\n]*)"', repl_double_quoted, command)
+    cmd = re.sub(r'"(\.{1,2}\\[^"\r\n]*)"', repl_double_quoted, cmd)
+
+    # 2. Single-quoted drive and relative paths: 'C:\foo\bar' or '.\foo\bar'
+    cmd = re.sub(r"'([a-zA-Z]:\\[^'\r\n]*)'", repl_single_quoted, cmd)
+    cmd = re.sub(r"'(\.{1,2}\\[^'\r\n]*)'", repl_single_quoted, cmd)
+
+    # 3. Unquoted drive and relative paths (stop at whitespace or shell delimiters)
+    unquoted_drive = re.compile(r'(^|[\s=,;(])([a-zA-Z]:\\[^\s"\'\r\n\t;&|<>(){}`]*)')
+    unquoted_rel = re.compile(r'(^|[\s=,;(])(\.{1,2}\\[^\s"\'\r\n\t;&|<>(){}`]*)')
+
+    cmd = unquoted_drive.sub(repl_unquoted, cmd)
+    cmd = unquoted_rel.sub(repl_unquoted, cmd)
+    return cmd
+
+
 # --- Shell discovery ---
 def _windows_bash_candidates(custom: "str | None") -> list[str]:
     """Ordered bash.exe candidates on Windows: HERMES_GIT_BASH_PATH, our portable Git
@@ -1107,6 +1149,10 @@ class LocalEnvironment(BaseEnvironment):
     def _prepare_command(self, command: str) -> tuple[str, str | None]:
         exec_command, sudo_stdin = super()._prepare_command(command)
         if _IS_WINDOWS:
+            # Normalize Windows backslash paths to forward slashes before
+            # BaseEnvironment places the command inside Bash's eval wrapper,
+            # where unquoted backslashes would be stripped as escape chars.
+            exec_command = _normalize_windows_paths_in_command(exec_command)
             # Protect PowerShell's own $ expressions before BaseEnvironment
             # places the command inside Bash's later eval wrapper.
             protected = _quote_windows_powershell_command(exec_command)

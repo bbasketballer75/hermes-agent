@@ -492,3 +492,74 @@ class TestMsysControlsNotLeakedToPosix:
         result = local_mod._make_run_env({})
         assert "MSYS_NO_PATHCONV" not in result
         assert "MSYS2_ARG_CONV_EXCL" not in result
+
+
+# ---------------------------------------------------------------------------
+# Windows Path Normalization for Bash eval safety
+# ---------------------------------------------------------------------------
+
+class TestWindowsPathNormalization:
+    """_normalize_windows_paths_in_command prevents Bash eval from stripping
+    backslashes from Windows paths before the target binary executes."""
+
+    @pytest.mark.parametrize("cmd, expected", [
+        (
+            r"powershell -File C:\ProgramData\MediaFlowLocalDns\enable_filter_49_local.ps1",
+            "powershell -File C:/ProgramData/MediaFlowLocalDns/enable_filter_49_local.ps1",
+        ),
+        (
+            r'powershell -ExecutionPolicy Bypass -File "C:\Program Files\App\run.ps1"',
+            'powershell -ExecutionPolicy Bypass -File "C:/Program Files/App/run.ps1"',
+        ),
+        (
+            r"python 'C:\Users\test\script.py'",
+            "python 'C:/Users/test/script.py'",
+        ),
+        (
+            r".\scripts\setup.ps1",
+            "./scripts/setup.ps1",
+        ),
+        (
+            r"..\parent\tool.exe",
+            "../parent/tool.exe",
+        ),
+        (
+            r'python -c "print(\"hello\nworld\")"',
+            r'python -c "print(\"hello\nworld\")"',
+        ),
+        (
+            r'git log --grep="fix\b"',
+            r'git log --grep="fix\b"',
+        ),
+        (
+            r"cp C:\foo\bar.txt D:\baz\qux.txt",
+            "cp C:/foo/bar.txt D:/baz/qux.txt",
+        ),
+    ])
+    def test_path_normalization_rules(self, cmd, expected):
+        assert local_mod._normalize_windows_paths_in_command(cmd) == expected
+
+    def test_prepare_command_normalizes_on_windows(self, monkeypatch):
+        monkeypatch.setattr(local_mod, "_IS_WINDOWS", True)
+        monkeypatch.setattr(
+            BaseEnvironment, "_prepare_command",
+            lambda self, command: (command, None),
+        )
+        env = LocalEnvironment.__new__(LocalEnvironment)
+        cmd, _ = env._prepare_command(
+            r"powershell -File C:\ProgramData\MediaFlowLocalDns\enable_filter_49_local.ps1"
+        )
+        assert cmd == "powershell -File C:/ProgramData/MediaFlowLocalDns/enable_filter_49_local.ps1"
+
+    def test_prepare_command_noop_on_posix(self, monkeypatch):
+        monkeypatch.setattr(local_mod, "_IS_WINDOWS", False)
+        monkeypatch.setattr(
+            BaseEnvironment, "_prepare_command",
+            lambda self, command: (command, None),
+        )
+        env = LocalEnvironment.__new__(LocalEnvironment)
+        cmd, _ = env._prepare_command(
+            r"powershell -File C:\ProgramData\MediaFlowLocalDns\enable_filter_49_local.ps1"
+        )
+        assert cmd == r"powershell -File C:\ProgramData\MediaFlowLocalDns\enable_filter_49_local.ps1"
+
