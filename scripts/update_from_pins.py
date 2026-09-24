@@ -27,8 +27,7 @@ from pathlib import Path
 
 def run(cmd: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
     """Run a command, capture output, raise if non-zero."""
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                          encoding='utf-8', errors='replace')
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding='utf-8', errors='replace')
     if check and proc.returncode != 0:
         print(f"FAILED: {' '.join(cmd)}", file=sys.stderr)
         print(proc.stdout, file=sys.stderr)
