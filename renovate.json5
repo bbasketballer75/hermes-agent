@@ -1,0 +1,111 @@
+{
+  // Renovate configuration for hermes-agent.
+  //
+  // This file exists to silence the dashboard warnings on
+  // https://github.com/bbasketballer75/hermes-agent/issues/47.
+  //
+  // Strategy: be honest about which lookups cannot succeed and which
+  // updates we deliberately do not want automated. Each entry below has
+  // a documented reason that maps back to the issue dashboard.
+  //
+  // For source dependencies (uv.lock, package-lock.json, Cargo.toml) we
+  // already pin exact versions and move them deliberately, so this config
+  // intentionally does NOT enable Renovate for those ecosystems — that
+  // would undermine the supply-chain posture (see .github/dependabot.yml
+  // for the analogous Dependabot policy).
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+
+  // Restrict manager autodiscovery (Copilot review finding, 2026-09-24):
+  // with autodiscovery on, Renovate proposes updates for ecosystems we
+  // deliberately pin by hand (uv, Cargo, pip), contradicting the strategy
+  // documented below. Only the two ecosystems this config actually
+  // governs are enabled; everything else stays manual.
+  enabledManagers: ["github-actions", "npm"],
+
+  // Pin GitHub Action versions to commit SHA. The matching Dependabot
+  // config (`.github/dependabot.yml`) already does this for the GitHub
+  // Actions ecosystem, but Renovate runs separately and needs the same
+  // stance — moving action pins to floating tags reintroduces the
+  // "manifest fetches a 'latest' blob every job" fragility we already paid
+  // down (see `.github/workflows/lint.yml` Astral/setup-uv pin comment).
+  pinDigests: true,
+
+  // ignoreDeps: entries Renovate should not try to look up.
+  //
+  // Each entry below is a real dependency we use, but whose presence in
+  // the dashboard is noise — either because Renovate's datasource cannot
+  // resolve it correctly, the upstream project is archived, or the
+  // package is deprecated but still in active build use.
+  ignoreDeps: [
+    // Local workspace package. ui-tui depends on it via
+    // "file:./packages/hermes-ink" (see ui-tui/package.json line 22 and
+    // the matching override at line 33). Renovate's npm datasource cannot
+    // resolve workspace-local file: deps and logs "Failed to look up npm
+    // package @hermes/ink" every run. We version this package in-tree
+    // and do not want automated bumps.
+    "@hermes/ink",
+
+    // Archived upstream action. ludeeus/action-shellcheck@00cae500... is
+    // pinned in .github/workflows/docker-lint.yml:48, but Renovate's
+    // github-tags datasource returns "Could not determine new digest"
+    // because the repo is no longer tagged. Until we migrate to a live
+    // alternative (e.g. reviewdog/action-shellcheck), silence the noise.
+    "ludeeus/action-shellcheck",
+
+    // Intermittent lookup failures. setup-uv's github-tags digest
+    // resolution fails on a non-trivial fraction of runs (dashboard logs
+    // "Could not determine new digest" across 9 workflows). The action
+    // is already pinned to a specific SHA across those workflows, and
+    // bumping setup-uv should be a deliberate choice — not an automated
+    // one driven by a flaky lookup.
+    "astral-sh/setup-uv",
+
+    // Deprecated npm package, but actively used in the Windows desktop
+    // build (apps/desktop/scripts/set-exe-identity.mjs:41 imports
+    // `rcedit` for PE resource editing on Hermes.exe). It is not going
+    // away until we replace that script. Suppress the deprecation
+    // warning until the replacement lands.
+    "rcedit",
+  ],
+
+  packageRules: [
+    // Keep Electron updates FULLY manual (Copilot review finding,
+    // 2026-09-24). The earlier `allowedVersions: "<41"` still let patch
+    // updates through, and Electron's version is a synchronized field
+    // across package.json files and build config — an unattended patch
+    // can desynchronize those pins and break the desktop build. The
+    // dashboard has an Ignored/Blocked entry for `electron v41
+    // [security]` (#46) because we previously rolled back to v40.10.2
+    // and want to evaluate any Electron bump explicitly.
+    {
+      description: "Electron updates are manual-only (synchronized version fields)",
+      matchPackageNames: ["electron"],
+      enabled: false,
+    },
+
+    // Security patches for GitHub Actions auto-merge once CI is green.
+    // Mirrors the Dependabot groups behaviour in .github/dependabot.yml
+    // for routine action bumps, but applies to Renovate's separate run.
+    {
+      description: "Auto-merge security patches for GitHub Actions once green",
+      matchManagers: ["github-actions"],
+      matchCategories: ["security"],
+      automerge: true,
+      automergeType: "pr",
+    },
+
+    // Group routine GitHub Actions patch + minor updates into one weekly
+    // PR. Reduces noise and matches the Dependabot grouping style.
+    // Weekly schedule + no automerge (Copilot review findings, 2026-09-24):
+    // routine action bumps get human review; only `security` (the rule
+    // above) merges unattended.
+    {
+      description: "Batch GitHub Actions minor + patch bumps into a single weekly PR",
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "github-actions-minor-patch",
+      schedule: ["before 6am on Monday"],
+    },
+  ],
+}
