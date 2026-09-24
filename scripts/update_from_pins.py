@@ -27,7 +27,8 @@ from pathlib import Path
 
 def run(cmd: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
     """Run a command, capture output, raise if non-zero."""
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
+                          encoding='utf-8', errors='replace')
     if check and proc.returncode != 0:
         print(f"FAILED: {' '.join(cmd)}", file=sys.stderr)
         print(proc.stdout, file=sys.stderr)
@@ -97,7 +98,7 @@ def main() -> int:
         print(f"ERROR: pins file {args.pins} is not a file", file=sys.stderr)
         return 1
 
-    pins = json.loads(args.pins.read_text())
+    pins = json.loads(args.pins.read_text(encoding="utf-8"))
     commits = pins.get("commits", [])
     if not commits:
         print("nothing to do (no commits in pins)")
