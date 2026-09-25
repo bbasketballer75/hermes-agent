@@ -53,12 +53,15 @@ function gitFor(cwd, gitBin) {
   // console.warn (which throws EPIPE on headless/detached GUI processes), and
   // opt into simple-git's trusted-binary escape hatch.
   let bin = gitBin || 'git'
+
   if (process.platform === 'win32' && /\s/.test(bin)) {
     const short = bin.replace(/Program Files \(x86\)/i, 'PROGRA~2').replace(/Program Files/i, 'PROGRA~1')
+
     if (existsSync(short)) {
       bin = short
     }
   }
+
   return simpleGit({
     baseDir: cwd,
     binary: bin,

@@ -1988,10 +1988,10 @@ function rememberLog(chunk) {
 
 // Prevent unhandled EPIPE crash if stdout/stderr pipe closes (e.g. detached GUI on Windows)
 process.stdout?.on?.('error', (err: any) => {
-  if (err?.code === 'EPIPE') return
+  if (err?.code === 'EPIPE') {return}
 })
 process.stderr?.on?.('error', (err: any) => {
-  if (err?.code === 'EPIPE') return
+  if (err?.code === 'EPIPE') {return}
 })
 
 installCrashForensics({ flush: flushDesktopLogBufferSync, log: rememberLog })

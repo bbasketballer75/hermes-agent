@@ -19,6 +19,7 @@ let generation = 0
 
 const closeUpdateTip = () => {
   const active = $activeTip.get()
+
   if (active?.tipId?.startsWith('local-runtime-update:')) {
     retireActiveTip()
   }
