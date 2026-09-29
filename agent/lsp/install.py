@@ -124,6 +124,12 @@ def _existing_binary(name: str, *, is_windows: Optional[bool] = None) -> Optiona
     """
     win = _is_windows() if is_windows is None else is_windows
     bases = [hermes_lsp_bin_dir() / name] + ([_npm_bin_dir() / name] if win else [])
+    if win:
+        for s in _WINDOWS_WRAPPER_SUFFIXES:
+            for base in bases:
+                cand = Path(str(base) + s)
+                if cand.exists() and os.access(cand, os.X_OK):
+                    return str(cand)
     for staged in (c for base in bases for c in _native_binary_candidates(base, is_windows=win)):
         if staged.exists() and os.access(staged, os.X_OK):
             return str(staged)
