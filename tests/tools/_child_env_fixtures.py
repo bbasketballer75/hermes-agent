@@ -69,7 +69,19 @@ def run_code(code, mode="project", enabled_tools=("read_file",), reset=True):
 
 
 def observe_terminal(env, names):
-    code = "import json,os; print(json.dumps({k:os.environ.get(k) for k in " + repr(list(names)) + "}))"
+    # The observed-name list is ~300 entries today and grows with every provider
+    # and plugin added. Inlining it into argv built a ~17KB command, which passes
+    # the Windows transport limit and surfaces as a misleading
+    # `bash: eval: line 5: unexpected EOF while looking for matching`. Pass the
+    # list out-of-band so argv stays O(1) in the number of names; the assertion is
+    # unchanged. Ref: hermes-acceptance/upstream-issue-windows-cmdline-length-subprocess-env.md
+    names_file = Path(env.cwd) / "observed_names.json"
+    names_file.write_text(json.dumps(list(names)), encoding="utf-8")
+    code = (
+        "import json,os;"
+        f"ns=json.load(open({names_file.as_posix()!r},encoding='utf-8'));"
+        "print(json.dumps({k:os.environ.get(k) for k in ns}))"
+    )
     command = shlex.join([Path(sys.executable).as_posix(), "-c", code])
     result = env.execute(command)
     assert result["returncode"] == 0, result
