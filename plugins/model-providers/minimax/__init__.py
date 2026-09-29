@@ -26,7 +26,10 @@ class MiniMaxProfile(ProviderProfile):
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """M3 on api.minimax.io/v1 keeps thinking inline unless ``reasoning_split``
         is sent; effort levels only select adaptive vs disabled ``thinking``."""
-        is_m3 = str(model or "").strip().lower() in {"minimax-m3", "minimax/minimax-m3"}
+        is_m3 = (
+            str(model or "").strip().lower() in {"minimax-m3", "minimax/minimax-m3"}
+            or "minimax-m3" in str(model or "").strip().lower()
+        )
         if not _is_minimax_global_openai_base_url(base_url) or not is_m3:
             return {}, {}
         extra_body: dict[str, Any] = {"reasoning_split": True}
