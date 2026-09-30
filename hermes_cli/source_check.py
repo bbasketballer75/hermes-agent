@@ -196,6 +196,7 @@ class _Checkout:
     head: Optional[str]
     current_branch: Optional[str]
     origin: str
+    upstream: str
     repository: Optional[str]
     dirty: bool
 
@@ -227,10 +228,19 @@ def _read_checkout(root: Path, git: str, embedded: Optional[str]) -> _Checkout:
     head = embedded or _git_stdout(["rev-parse", "HEAD"], cwd=root, git=git)
     current_branch = None if embedded else _git_stdout(["rev-parse", "--abbrev-ref", "HEAD"], cwd=root, git=git)
     origin = "" if embedded else (_git_stdout(["remote", "get-url", "origin"], cwd=root, git=git) or "")
+    upstream = "" if embedded else (_git_stdout(["remote", "get-url", "upstream"], cwd=root, git=git) or "")
     match = _GITHUB_ORIGIN.fullmatch(origin)
-    repository = OFFICIAL_REPOSITORY if embedded else (match[1] if match else None)
+    upstream_match = _GITHUB_ORIGIN.fullmatch(upstream)
+    # A checkout whose `origin` is a personal fork — the layout hermes-update.cmd produces
+    # (origin=fork, fork=fork, upstream=NousResearch) — would otherwise be compared against
+    # that fork, and because the fork's main is the local HEAD by construction, every check
+    # returns behind=0 and `hermes --version` reports "Up to date" forever. Prefer the
+    # `upstream` remote whenever one is configured; fall back to origin as before.
+    repository = OFFICIAL_REPOSITORY if embedded else (
+        (upstream_match[1] if upstream_match else None) or (match[1] if match else None)
+    )
     dirty = False if embedded else bool(_git_stdout(["status", "--porcelain"], cwd=root, git=git))
-    return _Checkout(root, git, embedded, head, current_branch, origin, repository, dirty)
+    return _Checkout(root, git, embedded, head, current_branch, origin, upstream, repository, dirty)
 
 
 def _configured_branch(desktop_config) -> Optional[str]:
@@ -290,12 +300,19 @@ def _resolve_channel(result: dict, channel: str, co: _Checkout):
 
 
 def _branch_remote(co: _Checkout, selected_branch: str) -> str:
+    # An explicitly configured `upstream` is the authoritative comparison target. Without
+    # this, a fork-based layout silently compares the local HEAD against the user's own
+    # fork and can never observe upstream drift.
+    if co.embedded:
+        return f"https://github.com/{OFFICIAL_REPOSITORY}.git"
+    if co.upstream:
+        return "upstream"
     official_ssh = (co.repository and co.repository.lower() == OFFICIAL_REPOSITORY.lower()
                     and co.origin.lower().startswith(("git@", "ssh://")))
     # The public official repo does not require the user's SSH credentials.
     # Forks must keep their own origin, including its authentication.
     return (f"https://github.com/{OFFICIAL_REPOSITORY}.git"
-            if co.embedded or (official_ssh and selected_branch != "main") else "origin")
+            if (official_ssh and selected_branch != "main") else "origin")
 
 
 def _heal_deleted_branch(branch_config_path: Path, desktop_config: dict) -> None:
@@ -406,8 +423,10 @@ def check_for_updates(*, install_root: Path | None = None, home: Path | None = N
         result["channel"] = channel
     else:
         result["branch"] = selected_branch
-    identity = {"root": str(root), "home": str(home), "head": co.head, "origin": co.origin, "branch": selected_branch,
-                "channel": channel, "embedded": embedded, "branchOverride": branch is not None, "channelProtocol": 1}
+    identity = {"root": str(root), "home": str(home), "head": co.head, "origin": co.origin,
+                "upstream": co.upstream, "branch": selected_branch,
+                "channel": channel, "embedded": embedded, "branchOverride": branch is not None,
+                "channelProtocol": 1}
     cache_file = Path(cache_path) if cache_path is not None else home / "source-checks" / f"{install_id(root)}.json"
     now = time.time()
     cached = None if force else _cached_status(cache_file, identity, now)
