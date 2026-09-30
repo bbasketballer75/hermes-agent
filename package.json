@@ -11,6 +11,7 @@
     "tests-js"
   ],
   "scripts": {
+    "test": "npm run typecheck --workspaces --if-present",
     "postinstall": "echo '✅ Node dependencies installed. Run: python run_agent.py --help'",
     "install:root": "npm install --workspaces=false",
     "install:web": "npm install --workspace web",
