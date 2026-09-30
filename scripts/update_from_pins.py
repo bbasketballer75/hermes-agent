@@ -27,6 +27,7 @@ Exit codes:
 from __future__ import annotations
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -110,6 +111,19 @@ RUNNER_RESTORED = {
 # `skip` intentionally drop their commit, so they provide no coverage.
 COVERING_ACTIONS = {"keep", "push"}
 
+# The batch commit update_from_pins.py writes after a successful apply. Recognised by its
+# subject rather than by a stored sha, so it keeps matching across runs.
+PIN_BATCH_SUBJECT = re.compile(r"^chore: apply \d+ local fix\(es\) from pins after update$")
+
+
+def _is_pin_batch_commit(sha: str, repo: Path) -> bool:
+    """True for the batch commit this script itself writes at the end of an apply."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "show", "-s", "--format=%s", sha],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    return proc.returncode == 0 and bool(PIN_BATCH_SUBJECT.match(proc.stdout.strip()))
+
 
 def commit_files(sha: str, repo: Path) -> list[str]:
     """Paths a commit touches (empty for a merge commit / unreadable commit)."""
@@ -173,6 +187,15 @@ def verify_against_pins(repo: Path, pins: dict, base: str) -> int:
     for sha in commits:
         files = commit_files(sha, repo)
         if files and set(files) <= RUNNER_RESTORED:
+            exempt += 1
+            continue
+        if _is_pin_batch_commit(sha, repo):
+            # This is the commit update_from_pins.py itself created at the end of the last
+            # run ("chore: apply N local fix(es) from pins after update"). Its `git add -A`
+            # sweeps the runner-restored scripts in alongside the applied fixes, so its
+            # file set is NOT a subset of RUNNER_RESTORED and it can no longer be matched
+            # to its individual pins. It is the pins, already applied — exempting it is
+            # what stops the guard from aborting every subsequent update.
             exempt += 1
             continue
         lost = [p for p in files if p not in covered_files and p not in RUNNER_RESTORED]
