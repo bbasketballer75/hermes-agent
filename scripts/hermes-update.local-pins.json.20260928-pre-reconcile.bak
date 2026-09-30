@@ -1,0 +1,67 @@
+{
+  "_comment": "Per-commit pin file for scripts\\hermes-update.cmd. action='keep' means re-apply after the update; action='push' means commit was already pushed to fork upstream (skip the cherry-pick); action='discard' means commit is no longer needed (already in upstream main).",
+  "_rebuilt": "2026-09-28. Rebuilt from the 29 fork-only commits (upstream/main..origin/main) down to the load-bearing set. The previous 12 entries pointed at individual pre-squash SHAs that are no longer reachable from main (they were squashed into ef7ce731f2), so they were pinned by object-hash in the local store only. Every entry below was verified: reachable from origin/main AND absent from upstream/main, so a cherry-pick after 'checkout -B main upstream/main' will find it. Dropped on purpose: 9 dependency/CI renovate bumps (upstream carries its own), 8 tooling commits (pyrefly.toml, tsconfig, LSP/IDE sugar), 1 type-check fix, 1 legacy active_profile fix, 1 package-lock tweak. The old file is preserved as hermes-update.local-pins.json.20260928-original12.bak.",
+  "assume_yes": false,
+  "commits": [
+    {
+      "sha": "ef7ce731f2",
+      "action": "keep",
+      "note": "chore: apply 11 local fix(es) from pins after update - bundle of the 11 pre-squash pin fixes (desktop/windows portability, tips retire, PowerShell quoting, config force=True, relay pop, kanban gates, YAML formatting, auth authority profile, postinstall encoding, write_file/drive-prefix and PATH dedup tests)"
+    },
+    {
+      "sha": "a2d523d30b",
+      "action": "keep",
+      "note": "fix(windows): normalize backslash paths to forward slashes before bash eval - adds _normalize_windows_paths_in_command. Verified ABSENT from upstream/main, which has only cwd-level _msys_to_windows_path/_bash_safe_path, not command-text rewriting. This is the fix that makes 'cmd /c echo /c/...' keep the switch and convert the path."
+    },
+    {
+      "sha": "2425c7de5a",
+      "action": "keep",
+      "note": "fix(windows): harden POSIX paths, trailing backslash EOF, and gsudo PowerShell quoting - adds _quote_windows_powershell_command. Verified ABSENT from upstream/main. Stops bash eating $_ and $() before PowerShell parses them."
+    },
+    {
+      "sha": "6185a207ad",
+      "action": "keep",
+      "note": "fix(windows): resolve wire contract, lsp spawn, backup locks, and workdir guards"
+    },
+    {
+      "sha": "c22ded6623",
+      "action": "keep",
+      "note": "fix(windows): normalize path separators in _check_sensitive_path and guard POSIX mode test - safety guard; keep the separator normalisation or the guard under-normalises on Windows"
+    },
+    {
+      "sha": "20967fa770",
+      "action": "keep",
+      "note": "fix(guards): support forward and backward slashes when checking hermes_config"
+    },
+    {
+      "sha": "485323623b",
+      "action": "keep",
+      "note": "fix(desktop/windows): normalize spaced git path to 8.3 short path and guard stdout/stderr against EPIPE"
+    },
+    {
+      "sha": "2c89194f45",
+      "action": "keep",
+      "note": "fix(lsp): resolve npm wrappers from node_modules on Windows and alias typescript package - needed because npm shims are .cmd on Windows"
+    },
+    {
+      "sha": "0bbce68a35",
+      "action": "keep",
+      "note": "fix(scripts): add explicit utf-8 encoding in update_from_pins (Windows footgun gate) - protects the updater itself"
+    },
+    {
+      "sha": "f672142f23",
+      "action": "keep",
+      "note": "feat(minimax): register MiniMax-M3.1-Flash-Preview in model catalogs and provider profile"
+    },
+    {
+      "sha": "bcb6a52e4e",
+      "action": "keep",
+      "note": "fix(minimax): pin default_aux_model to MiniMax-M3.1-Flash-Preview"
+    },
+    {
+      "sha": "bd3636a7be",
+      "action": "keep",
+      "note": "chore(scripts): keep updater scripts and updated local pins - carries the updater .cmd/.py/pins into main; needed or the update path itself is lost on checkout"
+    }
+  ]
+}

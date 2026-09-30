@@ -7,6 +7,7 @@ import pytest
 
 import hermes_cli.doctor as doctor
 from hermes_cli.doctor_state import check_legacy_desktop_checkout
+from utils import rmtree_readonly
 
 
 def _git(cwd, *args):
@@ -79,17 +80,9 @@ class TestLegacyDesktopCheckout:
         assert "rm -rf" not in out
 
     def test_silent_without_a_checkout(self, embedded_context, tmp_path, monkeypatch, capsys):
-        import shutil
-        import stat
-
-        def _force_rm(func, path, _exc):
-            # Windows: git object files are read-only; clear the bit and retry.
-            import os
-
-            os.chmod(path, stat.S_IWRITE)
-            func(path)
-
-        shutil.rmtree(embedded_context, onerror=_force_rm)
+        # rmtree_readonly handles the Windows read-only git object files (WinError 5);
+        # a bare shutil.rmtree stops at the first unlinkable entry.
+        rmtree_readonly(embedded_context)
         check_legacy_desktop_checkout()
         assert capsys.readouterr().out == ""
 
