@@ -1,17 +1,55 @@
 {
-  "_comment": "Per-commit pin file for scripts\\hermes-update.cmd. action='keep' means re-apply after the update; action='push' means commit was already pushed to fork upstream (skip the cherry-pick); action='discard' means commit is no longer needed (already in upstream main).",
-  "_reconciled": "2026-09-28 (second pass, after the 5,727-commit jump to upstream/main). The previous 12 entries were stale in two directions and would have re-conflicted on the next update. Landed entries were REMOVED rather than re-pinned: cherry-picks are now in main's own history, and two of them (6185a207ad, f672142f23) are NOT patch-id-equivalent after landing, so the tool would have retried and re-conflicted them. The rest are marked discard so the tool skips them cleanly instead of fighting. History: config.toml.20260928-pre-reconcile.bak holds the 12-entry version.",
+  "_comment": "Per-commit pin file for scripts\\hermes-update.cmd. hermes-update.cmd does `git checkout --force -B main upstream/main`, which destroys every local-only commit, then re-applies the `keep` entries below onto the new base. action='keep' means re-apply; action='push' means already pushed upstream (skip); action='discard' means deliberately NOT carried forward. Order is newest-first: update_from_pins.py iterates reversed(), so application is oldest-first.",
+  "_reconciled": "2026-09-30 (third pass, after a drift audit). The second pass left 4 discard-only entries, so an update re-applied nothing while 8 of 9 local-only commits existed only on the branch: the 4 Windows fixes, the hand-ported PowerShell quoting in tools/environments/local.py, the MiniMax aux-model pin, a test fixture, and the updater itself. update_from_pins.py --verify now aborts before the destructive checkout when a local-only commit touches a file no covering pin rewrites, so a discard-only pin file can no longer silently destroy work. Keep entries below were verified against `git branch --contains` (all reachable from fork/main, so they are GC-safe).",
+  "_upstream_sha_rule": "Commits 6185a207ad / 20967fa770 / 2c89194f45 / f672142f23 exist in NousResearch/hermes-agent but are NOT ancestors of upstream main (GitHub compare reports 'diverged'), so they must be re-applied. If any of them later lands on main, tip_already_applied() detects the patch and skips it automatically — the entry becomes a no-op and can be dropped.",
+  "_local_sha_rule": "b077396048, a8af64d0d3 and 6c8a40119f have no upstream counterpart (hand-ported or local-only work), so the pin references the local commit. They are durable because fork/main carries them; do NOT garbage-collect the fork.",
+  "_not_pinned": "Commits touching only scripts/hermes-update.cmd, scripts/update_from_pins.py and scripts/hermes-update.local-pins.json are deliberately NOT pinned. hermes-update.cmd stages those in %TEMP%\\hermes-update-runner and restores them into the repo right after the checkout, so they survive regardless. Pinning them would fail outright: after the restore they are untracked, and git refuses a cherry-pick that adds an already-untracked path.",
   "assume_yes": false,
   "commits": [
     {
+      "sha": "6c8a40119f",
+      "action": "keep",
+      "note": "fix(tests): pass observed env-var names out-of-band in observe_terminal. Touches tests/tools/_child_env_fixtures.py. No upstream counterpart."
+    },
+    {
+      "sha": "a8af64d0d3",
+      "action": "keep",
+      "note": "fix(minimax): pin default_aux_model to MiniMax-M3.1-Flash-Preview. Rewrites plugins/model-providers/minimax/__init__.py. Must be applied AFTER f672142f23, which also rewrites that file. No upstream counterpart."
+    },
+    {
+      "sha": "b077396048",
+      "action": "keep",
+      "note": "fix(windows): port command path normalization + PowerShell quoting onto current upstream (tools/environments/local.py, +259). This is the hand-reimplementation of the load-bearing piece of the discarded bundle ef7ce731f2: _quote_windows_powershell_command, verified absent from upstream/main. Without it, Windows command execution regresses. No upstream counterpart."
+    },
+    {
+      "sha": "f672142f23",
+      "action": "keep",
+      "note": "feat(minimax): register MiniMax-M3.1-Flash-Preview in model catalogs and provider profile. Rewrites hermes_cli/models_catalog_static.py and plugins/model-providers/minimax/__init__.py."
+    },
+    {
+      "sha": "2c89194f45",
+      "action": "keep",
+      "note": "fix(lsp): resolve npm wrappers from node_modules on Windows and alias typescript package — needed because npm shims are .cmd on Windows. Rewrites agent/lsp/cli.py and agent/lsp/install.py. Apply AFTER 6185a207ad, which also rewrites agent/lsp/install.py."
+    },
+    {
+      "sha": "20967fa770",
+      "action": "keep",
+      "note": "fix(guards): support forward and backward slashes when checking hermes_config. Rewrites tools/file_tools_write_guards.py."
+    },
+    {
+      "sha": "6185a207ad",
+      "action": "keep",
+      "note": "fix(windows): resolve wire contract, lsp spawn, backup locks, and workdir guards. Touches agent/lsp/{client,install}.py, hermes_cli/backup.py, tools/terminal_tool_guards.py, tui_gateway contracts and a test. Must be applied FIRST (oldest) — later pins also rewrite agent/lsp/install.py."
+    },
+    {
       "sha": "ef7ce731f2",
       "action": "discard",
-      "note": "chore: apply 11 local fix(es) from pins after update - squashed bundle of the 11 pre-squash pin fixes. Never landed: conflicts wholesale against current upstream. Its one genuinely load-bearing piece, PowerShell command quoting, was re-implemented by hand in local.py (_quote_windows_powershell_command, verified absent from upstream/main). The rest were desktop/tips/kanban/YAML conveniences scoped out deliberately."
+      "note": "chore: apply 11 local fix(es) from pins after update - squashed bundle of the 11 pre-squash pin fixes. Never landed: conflicts wholesale against current upstream. Its one genuinely load-bearing piece, PowerShell command quoting, was re-implemented by hand in local.py (b077396048 above) and is preserved by that entry. The rest were desktop/tips/kanban/YAML conveniences scoped out deliberately."
     },
     {
       "sha": "c22ded6623",
       "action": "discard",
-      "note": "fix(windows): normalize path separators in _check_sensitive_path and guard POSIX mode test. Never landed - conflicts against upstream's restructured tools/. Scoped out deliberately; it is a safety guard, not the terminal path fix, so it does not affect the /c/... or PowerShell-quoting classes that were re-implemented by hand."
+      "note": "fix(windows): normalize path separators in _check_sensitive_path and guard POSIX mode test. Never landed - conflicts against upstream's restructured tools/. Scoped out deliberately; it is a safety guard, not the terminal path fix, so it does not affect the /c/... or PowerShell-quoting classes that b077396048 carries."
     },
     {
       "sha": "485323623b",
