@@ -9,13 +9,20 @@ Reads scripts/hermes-update.local-pins.json and applies the actions:
 
 Idempotent: re-running the script on the same branch is safe — already-applied commits are skipped.
 
+``--verify`` runs the pre-flight check that hermes-update.cmd calls BEFORE its
+``git checkout --force -B main upstream/main``. That checkout is destructive: anything
+reachable only from the current branch is discarded. --verify proves that every local-only
+commit is reproducible from the pin file, so the reset can never silently drop work.
+
 Usage:
     python update_from_pins.py <repo_path> <pins_path>
+    python update_from_pins.py <repo_path> <pins_path> --verify [--against upstream/main]
 
 Exit codes:
     0 = success (all keep commits applied or skipped-cleanly)
     1 = fatal error (git problem, malformed pins, etc.)
     2 = partial success with conflicts (Austin must resolve manually)
+    3 = --verify found local-only commits that no pin would re-apply (refuse to reset)
 """
 from __future__ import annotations
 import argparse
@@ -84,10 +91,126 @@ def tip_already_applied(sha: str, repo: Path) -> tuple[bool, str]:
     return False, ""
 
 
+# The pin file itself can never be re-applied from a pin: hermes-update.cmd stages an
+# authoritative copy in %TEMP%\hermes-update-runner and restores it into the repo right
+# after the destructive checkout, so a cherry-pick that touched this file would collide
+# with that restored copy (and would regress the pin set on the following run). Commits
+# whose diff is confined to this file are therefore exempt from the coverage check.
+SELF_REFERENTIAL = {"scripts/hermes-update.local-pins.json"}
+
+# Actions whose commit the update will actually re-apply onto the new base. `discard` and
+# `skip` intentionally drop their commit, so they provide no coverage.
+COVERING_ACTIONS = {"keep", "push"}
+
+
+def commit_files(sha: str, repo: Path) -> list[str]:
+    """Paths a commit touches (empty for a merge commit / unreadable commit)."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "show", "--name-only", "--format=", sha],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        return []
+    return [line.strip().replace("\\", "/") for line in proc.stdout.splitlines() if line.strip()]
+
+
+def local_only_commits(base: str, repo: Path) -> list[str]:
+    """Commits reachable from HEAD but not from ``base``, oldest first."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "rev-list", "--reverse", f"{base}..HEAD"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if proc.returncode != 0:
+        raise SystemExit(f"ERROR: cannot list commits in {base}..HEAD")
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def verify_against_pins(repo: Path, pins: dict, base: str) -> int:
+    """Refuse to let a destructive reset discard work the pin file would not restore.
+
+    The safety property being enforced is the absence of *silent* loss. A local commit is
+    covered when every file it touches is either touched by some covering pin, or is the
+    pin file itself. Coverage is deliberately file-level rather than patch-id-level: a pin
+    that rewrites the same file still surfaces loudly (update_from_pins reports CONFLICT and
+    exits 2 for manual resolution), whereas a file no pin touches is discarded with no
+    signal at all. Conflicting is recoverable; silent is not.
+    """
+    print(f"=== verifying local work against {base} ===")
+    print(f"  repo: {repo}")
+
+    commits = local_only_commits(base, repo)
+    if not commits:
+        print("  no local-only commits — nothing to lose.")
+        return 0
+    print(f"  local-only commits: {len(commits)}")
+
+    covered_files: dict[str, str] = {}
+    for entry in pins.get("commits", []):
+        sha = entry.get("sha")
+        action = entry.get("action", "skip")
+        if not sha or action not in COVERING_ACTIONS:
+            continue
+        resolved = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"],
+            capture_output=True, text=True,
+        )
+        if resolved.returncode != 0 or not resolved.stdout.strip():
+            print(f"  WARNING: pin {sha[:11]} ({action}) is not present in this repo")
+            continue
+        for path in commit_files(resolved.stdout.strip(), repo):
+            covered_files.setdefault(path, f"{sha[:11]} ({action})")
+
+    uncovered: list[tuple[str, list[str]]] = []
+    exempt = 0
+    for sha in commits:
+        files = commit_files(sha, repo)
+        if files and set(files) <= SELF_REFERENTIAL:
+            exempt += 1
+            continue
+        lost = [p for p in files if p not in covered_files and p not in SELF_REFERENTIAL]
+        if lost:
+            uncovered.append((sha, lost))
+
+    print()
+    print(f"=== summary ===")
+    print(f"  local-only:   {len(commits)}")
+    print(f"  covered:      {len(commits) - exempt - len(uncovered)}")
+    print(f"  self-exempt:  {exempt}  (pin-file bookkeeping)")
+    print(f"  UNCOVERED:    {len(uncovered)}")
+
+    if not uncovered:
+        print()
+        print("  every local-only commit has a pin that rewrites its files.")
+        print("  Safe to reset: a re-apply may conflict (loud), but nothing is lost silently.")
+        return 0
+
+    print()
+    print("  ABORT: the destructive checkout would discard local work that no pin")
+    print("  rewrites. Add a pin entry with action \"keep\" for each commit below, or")
+    print("  land it upstream, before running the update again:")
+    for sha, lost in uncovered:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "show", "-s", "--format=%s", sha],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        subject = proc.stdout.strip() if proc.returncode == 0 else ""
+        print()
+        print(f"    {sha}")
+        print(f"      {subject}")
+        print(f"      files with no covering pin:")
+        for path in lost:
+            print(f"        {path}")
+    return 3
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", type=Path)
     parser.add_argument("pins", type=Path)
+    parser.add_argument("--verify", action="store_true",
+                        help="pre-flight: abort if any local-only commit is not covered by a pin")
+    parser.add_argument("--against", default="upstream/main",
+                        help="ref that the destructive checkout resets to (default: upstream/main)")
     args = parser.parse_args()
 
     if not args.repo.is_dir():
@@ -98,6 +221,10 @@ def main() -> int:
         return 1
 
     pins = json.loads(args.pins.read_text(encoding="utf-8"))
+
+    if args.verify:
+        return verify_against_pins(args.repo, pins, args.against)
+
     commits = pins.get("commits", [])
     if not commits:
         print("nothing to do (no commits in pins)")

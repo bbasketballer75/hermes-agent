@@ -68,8 +68,23 @@ git fetch fork 2>nul
 echo       done.
 
 REM ===========================================================================
-REM  Step 3: checkout main from upstream/main (NousResearch)
+REM  Step 3: pre-flight, then checkout main from upstream/main (NousResearch)
 REM ===========================================================================
+REM 2026-09-30 FIX: this checkout is destructive. Before running it, prove that
+REM every commit living only on the local branch is reproducible from the pin
+REM file. Without this guard an update silently dropped 4 Windows fixes plus the
+REM PowerShell-quoting port and the updater itself, because the pin file had been
+REM reconciled down to discard-only entries and re-applied nothing.
+python "%~dp0update_from_pins.py" "%REPO%" "%PIN%" --verify --against upstream/main
+if errorlevel 1 (
+  echo.
+  echo       ABORTED: local work is not covered by the pin file.
+  echo       The checkout below would discard it. Fix the pin file or land the
+  echo       commits upstream, then re-run. Nothing was changed.
+  popd
+  exit /b 2
+)
+
 echo [3/8] checking out main branch from upstream/main...
 REM 2026-09-28 FIX: base must be upstream/main (NousResearch), not origin/main.
 REM origin and fork both point at this user's own repo, so basing on origin/main
