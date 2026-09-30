@@ -7,6 +7,11 @@
   "assume_yes": false,
   "commits": [
     {
+      "sha": "b747fdb565",
+      "action": "keep",
+      "note": "fix(update-check): compare against the upstream remote, not origin. hermes_cli/source_check.py + banner.py. Without this the update check compares the local HEAD against the user's own fork, so behind is always 0 and 'hermes --version' reports 'Up to date' regardless of real upstream drift. Self-referential but load-bearing: without it the update cannot even report what it is about to do. No upstream counterpart (2026-09-30)."
+    },
+    {
       "sha": "6c8a40119f",
       "action": "keep",
       "note": "fix(tests): pass observed env-var names out-of-band in observe_terminal. Touches tests/tools/_child_env_fixtures.py. No upstream counterpart."
