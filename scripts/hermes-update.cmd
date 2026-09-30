@@ -155,15 +155,42 @@ popd
 REM ===========================================================================
 REM  Step 7: rebuild desktop app
 REM ===========================================================================
-echo [7/8] rebuilding desktop app...
+REM 2026-09-30 FIX: this step ran `npm run dist:win`, which builds the MSIX
+REM installer only. This machine does not install from MSIX -- the desktop
+REM shortcut launches the UNPACKED build at
+REM   apps\desktop\release\win-unpacked\Hermes.exe
+REM so `dist:win` never rebuilt the binary actually in use, and it also wiped
+REM win-unpacked on its way to failing MSIX packaging, leaving the shortcut
+REM pointing at a missing Hermes.exe. `npm run pack` (builder --dir) is the
+REM target that produces win-unpacked.
+echo [7/8] rebuilding desktop app (unpacked target)...
 pushd "%REPO%\apps\desktop"
-call npm run dist:win 2>>"%LOG%"
+REM 2026-09-30: electron-builder must unlink release\win-unpacked before it can
+REM repack. If a running Hermes app or an antivirus scan still holds
+REM resources\app.asar, that unlink fails as a bare "EBUSY: resource busy or
+REM locked" with no hint about the cause. Probe it first and say something useful.
+pwsh -NoProfile -NonInteractive -Command "$p='release\win-unpacked\resources\app.asar'; if (Test-Path -LiteralPath $p) { try { $f=[IO.File]::Open($p,'Open','ReadWrite','None'); $f.Close() } catch { Write-Output ('LOCKED ' + `$args[0]); exit 3 } }" "%REPO%\apps\desktop\release\win-unpacked\resources\app.asar" >nul 2>&1
+if errorlevel 3 (
+  echo       BLOCKED: release\win-unpacked\resources\app.asar is locked.
+  echo       Close any running Hermes desktop app, and if an antivirus scan is
+  echo       in progress let it finish ^(Defender re-scans a tree for a long
+  echo       time after an exclusion changes^). Then re-run the update.
+  popd
+  exit /b 7
+)
+call npm run pack 2>>"%LOG%"
 if errorlevel 1 (
   echo       desktop rebuild FAILED - check log: %LOG%
   popd
   exit /b 7
 )
-echo       done.
+if not exist "release\win-unpacked\Hermes.exe" (
+  echo       desktop rebuild produced NO release\win-unpacked\Hermes.exe
+  echo       the desktop shortcut would point at a missing binary - check log: %LOG%
+  popd
+  exit /b 7
+)
+echo       done ^(release\win-unpacked\Hermes.exe^)
 popd
 
 pushd "%REPO%"
