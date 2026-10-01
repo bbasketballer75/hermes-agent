@@ -7,6 +7,11 @@
   "assume_yes": false,
   "commits": [
     {
+      "sha": "88149ac8c7",
+      "action": "keep",
+      "note": "fix(version): read release-candidate tags, not just CalVer, for the base version. hermes_cli/version_info.py. Without this the install reports 0.18.0+32299 while actually running 0.21.5+77. No upstream counterpart (2026-09-30)."
+    },
+    {
       "sha": "b08dfc3000",
       "action": "keep",
       "note": "fix(tests): delete git checkouts with utils.rmtree_readonly instead of bare shutil.rmtree. Rewrites three test files. Git marks loose objects read-only, so shutil.rmtree aborts with WinError 5 on Windows; test_source_channel_integration.py's shallow-transport case failed because of it. The helper already exists upstream with its own regression tests. No upstream counterpart (2026-09-30)."
