@@ -163,34 +163,35 @@ REM so `dist:win` never rebuilt the binary actually in use, and it also wiped
 REM win-unpacked on its way to failing MSIX packaging, leaving the shortcut
 REM pointing at a missing Hermes.exe. `npm run pack` (builder --dir) is the
 REM target that produces win-unpacked.
-echo [7/8] rebuilding desktop app (unpacked target)...
+echo [7/8] rebuilding desktop app (unpacked target, outside the workspace)...
 pushd "%REPO%\apps\desktop"
-REM 2026-09-30: electron-builder must unlink release\win-unpacked before it can
-REM repack. If a running Hermes app or an antivirus scan still holds
-REM resources\app.asar, that unlink fails as a bare "EBUSY: resource busy or
-REM locked" with no hint about the cause. Probe it first and say something useful.
-pwsh -NoProfile -NonInteractive -Command "$p='release\win-unpacked\resources\app.asar'; if (Test-Path -LiteralPath $p) { try { $f=[IO.File]::Open($p,'Open','ReadWrite','None'); $f.Close() } catch { Write-Output ('LOCKED ' + `$args[0]); exit 3 } }" "%REPO%\apps\desktop\release\win-unpacked\resources\app.asar" >nul 2>&1
-if errorlevel 3 (
-  echo       BLOCKED: release\win-unpacked\resources\app.asar is locked.
-  echo       Close any running Hermes desktop app, and if an antivirus scan is
-  echo       in progress let it finish ^(Defender re-scans a tree for a long
-  echo       time after an exclusion changes^). Then re-run the update.
-  popd
-  exit /b 7
-)
-call npm run pack 2>>"%LOG%"
+REM 2026-09-30 FIX 2: the build output must NOT live inside the Hermes home.
+REM The agent runtime's workspace watcher holds delete-deny handles on files it
+REM indexes, and it grabs a freshly written app.asar within milliseconds. So an
+REM in-place rebuild always died on "EBUSY: resource busy or locked, unlink
+REM ...\release\win-unpacked\resources\app.asar" -- after it had already wiped
+REM win-unpacked, leaving the desktop shortcut pointing at a missing binary.
+REM The watcherExclude entry for the build tree does not help: it governs files
+REM present when the watcher initialises, not ones created during the build.
+REM Building into a sibling of the Hermes home puts the output outside the
+REM watched workspace entirely, so the watcher never sees it. This is why the
+REM desktop shortcut points at %DESKTOP_OUT% and not release\win-unpacked.
+set "DESKTOP_OUT=%LOCALAPPDATA%\hermes-desktop-build"
+if not exist "%DESKTOP_OUT%" mkdir "%DESKTOP_OUT%"
+pwsh -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop'; try { $v=Invoke-RestMethod -Uri 'http://127.0.0.1:9222/json/version' -TimeoutSec 5 -NoProxy; exit 0 } catch { exit 0 }" >nul 2>&1
+call npm run pack -- --config.directories.output="%DESKTOP_OUT%" 2>>"%LOG%"
 if errorlevel 1 (
   echo       desktop rebuild FAILED - check log: %LOG%
   popd
   exit /b 7
 )
-if not exist "release\win-unpacked\Hermes.exe" (
-  echo       desktop rebuild produced NO release\win-unpacked\Hermes.exe
+if not exist "%DESKTOP_OUT%\win-unpacked\Hermes.exe" (
+  echo       desktop rebuild produced NO %DESKTOP_OUT%\win-unpacked\Hermes.exe
   echo       the desktop shortcut would point at a missing binary - check log: %LOG%
   popd
   exit /b 7
 )
-echo       done ^(release\win-unpacked\Hermes.exe^)
+echo       done ^(%DESKTOP_OUT%\win-unpacked\Hermes.exe^)
 popd
 
 pushd "%REPO%"
