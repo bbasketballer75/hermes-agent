@@ -12,6 +12,7 @@ from hermes_cli import main, source_releases, update_cmd
 from hermes_cli.subcommands.update import build_update_parser
 from hermes_cli.update_channel import channel_record, set_install_channel
 from hermes_cli.config import require_readable_config_before_write
+from utils import rmtree_readonly
 
 # These tests model channel archives and the reader's own transport.
 pytestmark = pytest.mark.real_release_channels
@@ -347,8 +348,9 @@ def test_retirement_refuses_to_downgrade_newer_source(
         source, monkeypatch, retired_channel_archive, transport):
     git(source.root, "checkout", "--detach", source.commits[2])
     if transport == "shallow":
-        import shutil
-        shutil.rmtree(source.root)
+        # rmtree_readonly, not shutil.rmtree: git marks loose object files read-only on
+        # Windows, and shutil.rmtree stops at the first unlinkable entry (WinError 5).
+        rmtree_readonly(source.root)
         git(source.root.parent, "clone", "--depth=1", source.origin.as_uri(), str(source.root))
     if transport == "zip":
         (source.root / "pyproject.toml").write_text('[project]\nversion = "1.2.2"\n')

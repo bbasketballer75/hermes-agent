@@ -6,6 +6,7 @@ import ntpath
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -209,6 +210,249 @@ def _resolve_safe_cwd(cwd: str) -> str:
 
 
 # --- Child-process environment construction ---
+# --- Windows: PowerShell quoting + command path normalization ---
+# Ported 2026-09-28 from this fork. Upstream handles cwd/initial-dir MSYS
+# translation above (_msys_to_windows_path, _bash_safe_path, _quote_bash_path)
+# but not what appears inside a command string, which is what these do.
+_WINDOWS_POWERSHELL_EXES = frozenset(
+    {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
+)
+_WINDOWS_ELEVATION_EXES = frozenset(
+    {"gsudo", "gsudo.exe", "sudo", "sudo.exe"}
+)
+_WINDOWS_ELEVATION_VALUE_FLAGS = frozenset(
+    {"-i", "--integrity", "-u", "--user", "--loglevel", "--chdir"}
+)
+_BASH_TOP_LEVEL_PUNCTUATION = frozenset(";&|<>(){}[]#")
+_BASH_UNQUOTED_EXPANSION_CHARS = frozenset("$`*?~\\")
+_POWERSHELL_COMMAND_SWITCH_NAMES = frozenset(
+    {"c", "co", "com", "comm", "comma", "comman", "command", "commandwithargs"}
+)
+_POWERSHELL_FLAG_SWITCH_NAMES = frozenset(
+    {
+        "login",
+        "mta",
+        "nologo",
+        "nol",
+        "noexit",
+        "noe",
+        "noninteractive",
+        "non",
+        "noprofile",
+        "nop",
+        "sta",
+    }
+)
+_POWERSHELL_VALUE_SWITCH_NAMES = frozenset(
+    {
+        "configurationname",
+        "custompipename",
+        "encodedarguments",
+        "executionpolicy",
+        "ep",
+        "inputformat",
+        "inp",
+        "outputformat",
+        "of",
+        "settingsfile",
+        "version",
+        "windowstyle",
+        "workingdirectory",
+        "wd",
+    }
+)
+_POWERSHELL_NON_COMMAND_MODES = frozenset(
+    {"f", "file", "e", "ec", "enc", "encodedcommand"}
+)
+def _scan_conservative_bash_words(
+    command: str,
+) -> tuple[frozenset[int], bool] | None:
+    """Inspect a simple Bash command without changing its word semantics.
+    Return the word indexes containing live ``$``/backtick expansion inside
+    double quotes plus whether the executable word used any quoting. Unquoted
+    Bash expansion, backslashes, globbing, control operators, comments, and
+    malformed quotes are rejected so the later POSIX ``shlex`` pass cannot
+    silently reinterpret them.
+    """
+    quote: str | None = None
+    word_index = -1
+    in_word = False
+    executable_was_quoted = False
+    expanding_words: set[int] = set()
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if char == "\\" and index + 1 < len(command):
+                next_char = command[index + 1]
+                if next_char in '$`"\\':
+                    index += 2
+                    continue
+            if char == '"':
+                quote = None
+            elif char in "$`":
+                expanding_words.add(word_index)
+            index += 1
+            continue
+        if char.isspace():
+            in_word = False
+            index += 1
+            continue
+        if not in_word:
+            word_index += 1
+            in_word = True
+        if char in ("'", '"'):
+            quote = char
+            if word_index == 0:
+                executable_was_quoted = True
+        elif (
+            char in _BASH_TOP_LEVEL_PUNCTUATION
+            or char in _BASH_UNQUOTED_EXPANSION_CHARS
+        ):
+            return None
+        index += 1
+    if quote is not None:
+        return None
+    return frozenset(expanding_words), executable_was_quoted
+def _powershell_command_payload_start(tokens: list[str]) -> int | None:
+    """Locate a real host-level Command switch before script/encoded modes."""
+    index = 1
+    while index < len(tokens):
+        token = tokens[index].lower()
+        if len(token) < 2 or token[0] not in ("-", "/"):
+            return None
+        switch_name = token[1:]
+        if switch_name in _POWERSHELL_COMMAND_SWITCH_NAMES:
+            return index + 1
+        if switch_name in _POWERSHELL_NON_COMMAND_MODES or switch_name == "-":
+            return None
+        if switch_name in _POWERSHELL_FLAG_SWITCH_NAMES:
+            index += 1
+            continue
+        if switch_name in _POWERSHELL_VALUE_SWITCH_NAMES:
+            if index + 1 >= len(tokens):
+                return None
+            index += 2
+            continue
+        return None
+    return None
+def _quote_windows_powershell_command(command: str) -> str | None:
+    """Safely re-quote a standalone PowerShell invocation for outer Bash.
+    Hermes normally wraps local commands in ``bash -c`` and a later ``eval``.
+    Bash otherwise expands PowerShell expressions such as ``$_.Path`` and
+    ``$env:TEMP`` before PowerShell sees them. This recognizes a simple,
+    standalone pwsh/powershell invocation (including when wrapped in gsudo or
+    sudo) and rebuilds each parsed argv token with Bash-safe quoting. Ambiguous
+    shell syntax stays on the existing Bash path unchanged.
+    """
+    stripped = command.strip()
+    if not stripped or "\n" in stripped or "\r" in stripped:
+        return None
+    scan = _scan_conservative_bash_words(stripped)
+    if scan is None:
+        return None
+    expanding_words, executable_was_quoted = scan
+    try:
+        tokens = shlex.split(stripped, comments=False, posix=True)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    ps_token_index = 0
+    first_token = ntpath.basename(tokens[0]).lower()
+    if first_token in _WINDOWS_ELEVATION_EXES:
+        i = 1
+        while i < len(tokens):
+            t = tokens[i]
+            t_lower = t.lower()
+            if t_lower in _WINDOWS_ELEVATION_VALUE_FLAGS:
+                i += 2
+                continue
+            if t_lower.startswith("-"):
+                i += 1
+                continue
+            ps_token_index = i
+            break
+        if ps_token_index == 0 or ps_token_index >= len(tokens):
+            return None
+    exe_name = ntpath.basename(tokens[ps_token_index]).lower()
+    if exe_name not in _WINDOWS_POWERSHELL_EXES:
+        return None
+    rel_command_start = _powershell_command_payload_start(tokens[ps_token_index:])
+    if rel_command_start is None:
+        return None
+    command_start = ps_token_index + rel_command_start
+    if expanding_words and (
+        any(word_index < command_start for word_index in expanding_words)
+    ):
+        return None
+    rebuilt = [shlex.quote(token) for token in tokens]
+    if executable_was_quoted:
+        escaped_executable = tokens[0].replace("'", "'\"'\"'")
+        rebuilt[0] = f"'{escaped_executable}'"
+    return " ".join(rebuilt)
+def _normalize_windows_paths_in_command(command: str) -> str:
+    """Normalize Windows backslash and POSIX-drive paths to forward slashes.
+    In Git Bash on Windows, terminal commands run inside an ``eval '{escaped}'``
+    block. In Bash word-parsing, unquoted backslashes are treated as escape
+    characters and stripped, corrupting paths such as
+    ``C:\\ProgramData\\MediaFlowLocalDns\\script.ps1`` into
+    ``C:ProgramDataMediaFlowLocalDnsscript.ps1``. Trailing backslashes before
+    closing quotes (e.g. ``"dir\\"``) escape the quote and crash Bash with
+    ``unexpected EOF while looking for matching '"'``.
+    Additionally, with ``MSYS_NO_PATHCONV=1``, POSIX drive paths (``/c/...``)
+    passed to native Windows binaries (python, powershell, git, node) are treated
+    literally as ``C:\\c\\...`` or rejected as invalid arguments.
+    Windows Win32 APIs (CreateFileW), PowerShell, Python, Node, Git, etc.
+    natively support forward slashes. In Bash, forward slashes are path
+    separators and never treated as escape characters, surviving eval intact.
+    """
+    if not command:
+        return command
+    def repl_unquoted(match: re.Match) -> str:
+        return match.group(1) + match.group(2).replace("\\", "/")
+    def repl_double_quoted(match: re.Match) -> str:
+        return match.group(1) + '"' + match.group(2).replace("\\", "/") + '"'
+    def repl_single_quoted(match: re.Match) -> str:
+        return match.group(1) + "'" + match.group(2).replace("\\", "/") + "'"
+    def repl_posix_drive(match: re.Match) -> str:
+        prefix = match.group(1)
+        drive_letter = match.group(2).upper()
+        tail = match.group(3) or ""
+        return f"{prefix}{drive_letter}:{tail}"
+    # 1. POSIX drive paths: /c/..., /cygdrive/c/..., /mnt/c/... -> C:/...
+    # Must be preceded by start of line, whitespace, or shell delimiters
+    # and followed by '/' and path characters (never CLI flags like 'cmd /c')
+    posix_pattern = re.compile(
+        r'(^|[\s"\'=,;(])/(?:(?:cygdrive|mnt)/)?([a-zA-Z])(/[^"\'\r\n\t;&|<>(){}`]*)'
+    )
+    cmd = posix_pattern.sub(repl_posix_drive, command)
+    # 2. Double-quoted paths containing backslashes:
+    # 2a. Drive paths: "C:\foo\bar" or "C:\foo\bar\"
+    cmd = re.sub(r'(^|[\s=,;(])"([a-zA-Z]:\\[^"\r\n]*)"', repl_double_quoted, cmd)
+    # 2b. Dot-relative paths: ".\foo\bar", "..\foo\bar", ".\dist\"
+    cmd = re.sub(r'(^|[\s=,;(])"(\.{1,2}\\[^"\r\n]*)"', repl_double_quoted, cmd)
+    # 2c. Multi-segment relative directory/path: "cron\output\", "sub\folder\file.txt"
+    cmd = re.sub(r'(^|[\s=,;(])"([a-zA-Z0-9_.~-]+\\[a-zA-Z0-9_.~-]+\\[^"\r\n]*)"', repl_double_quoted, cmd)
+    # 3. Single-quoted paths containing backslashes:
+    cmd = re.sub(r"(^|[\s=,;(])'([a-zA-Z]:\\[^'\r\n]*)'", repl_single_quoted, cmd)
+    cmd = re.sub(r"(^|[\s=,;(])'(\.{1,2}\\[^'\r\n]*)'", repl_single_quoted, cmd)
+    cmd = re.sub(r"(^|[\s=,;(])'([a-zA-Z0-9_.~-]+\\[a-zA-Z0-9_.~-]+\\[^'\r\n]*)'", repl_single_quoted, cmd)
+    # 4. Unquoted paths containing backslashes (stop at whitespace or shell delimiters)
+    unquoted_drive = re.compile(r'(^|[\s=,;(])([a-zA-Z]:\\[^\s"\'\r\n\t;&|<>(){}`]*)')
+    unquoted_dot_rel = re.compile(r'(^|[\s=,;(])(\.{1,2}\\[^\s"\'\r\n\t;&|<>(){}`]*)')
+    unquoted_multi_rel = re.compile(r'(^|[\s=,;(])([a-zA-Z0-9_.~-]+\\[a-zA-Z0-9_.~-]+\\[^\s"\'\r\n\t;&|<>(){}`]*)')
+    cmd = unquoted_drive.sub(repl_unquoted, cmd)
+    cmd = unquoted_dot_rel.sub(repl_unquoted, cmd)
+    cmd = unquoted_multi_rel.sub(repl_unquoted, cmd)
+    return cmd
+
+
 def _apply_profile_home(env: dict) -> None:
     """Bridge the context-local HERMES_HOME override, then the subprocess HOME contract."""
     from hermes_constants import apply_subprocess_home_env, get_hermes_home_override
@@ -988,6 +1232,21 @@ class LocalEnvironment(BaseEnvironment):
                 "falling back to %r so terminal commands keep working.",
                 self.cwd, safe_cwd)
         self.cwd = safe_cwd
+
+    def _prepare_command(self, command: str) -> tuple[str, str | None]:
+        exec_command, sudo_stdin = super()._prepare_command(command)
+        if _IS_WINDOWS:
+            # Normalize Windows backslash and POSIX-drive paths to forward
+            # slashes before BaseEnvironment wraps the command in Bash's
+            # eval wrapper, where unquoted backslashes are eaten as escapes
+            # and /c/... reaching a native binary resolves drive-relative to
+            # C:\\c\\... .
+            exec_command = _normalize_windows_paths_in_command(exec_command)
+            # Protect PowerShell's own $ expressions before Bash's eval.
+            protected = _quote_windows_powershell_command(exec_command)
+            if protected is not None:
+                exec_command = protected
+        return exec_command, sudo_stdin
 
     def _run_bash(self, cmd_string: str, *, login: bool = False, timeout: int = 120,
                   stdin_data: str | None = None) -> subprocess.Popen:

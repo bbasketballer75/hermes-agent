@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.e2e.core.upgrade import _helpers as H
+from utils import rmtree_readonly
 
 OFFICIAL_HTTPS = "https://github.com/NousResearch/hermes-agent.git"
 OFFICIAL_SSH = "git@github.com:NousResearch/hermes-agent.git"
@@ -71,7 +72,9 @@ def publish_commit(origin: Path, scratch: Path, message: str, files: dict[str, s
     """Add one upstream commit on origin/main (a new release the user updates to); returns its sha."""
     work = scratch / f"publish-{hashlib.sha1(message.encode()).hexdigest()[:8]}"
     if work.exists():
-        shutil.rmtree(work)
+        # `work` is a git clone, and git marks loose objects read-only on Windows, where
+        # shutil.rmtree stops at the first unlinkable entry.
+        rmtree_readonly(work)
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_AUTHOR_NAME": "e2e", "GIT_AUTHOR_EMAIL": "e2e@example.invalid",
            "GIT_COMMITTER_NAME": "e2e", "GIT_COMMITTER_EMAIL": "e2e@example.invalid"}
     git("clone", "-q", "--shared", "--no-checkout", "-b", "main", str(origin), str(work), cwd=scratch, env=env)
