@@ -12,6 +12,7 @@ Resolution order:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -20,6 +21,10 @@ from typing import Literal, cast
 
 from hermes_cli.steward import UPDATE_MECHANISMS
 from hermes_cli.update_channel import STABLE_TAG_RE
+
+# Release-candidate tags carry the semver inline: "rc.33-v0.21.5". Deliberately
+# excludes "abandoned-rc.N-vX.Y.Z", which is not a release.
+_RC_TAG_VERSION_RE = re.compile(r"^rc\.\d+-v(\d+\.\d+\.\d+)$")
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,26 @@ def _parse_nonnegative(value: str | None) -> int | None:
     return parsed if parsed >= 0 else None
 
 
+def _semver_release_version(repo_dir: Path) -> tuple[str, int] | None:
+    """The version from the nearest release-candidate tag, and the commits since it.
+
+    2026-09-30: the project moved from ``vYYYY.M.D`` CalVer tags to
+    ``rc.<n>-vX.Y.Z`` release-candidate tags. ``_calver_release_version`` only
+    matches the old scheme, so on a modern checkout it found the last CalVer tag,
+    read ``0.18.0`` out of its pyproject, and reported a 30000+ commit distance --
+    labelling a 0.21.5 install as 0.18.0. Prefer whichever candidate is nearer HEAD.
+    """
+    described = _run_git(repo_dir, "describe", "--tags", "--long", "--match", "rc.[0-9]*-v*", "HEAD")
+    if not described:
+        return None
+    tag, count, _ = described.rsplit("-", 2)
+    distance = _parse_nonnegative(count)
+    match = _RC_TAG_VERSION_RE.fullmatch(tag)
+    if distance is None or match is None:
+        return None
+    return match.group(1), distance
+
+
 def _calver_release_version(repo_dir: Path) -> tuple[str, int] | None:
     """The version the nearest CalVer release shipped, and the commits since it.
 
@@ -113,6 +138,18 @@ def _calver_release_version(repo_dir: Path) -> tuple[str, int] | None:
     if distance is None or not isinstance(version, str) or not STABLE_TAG_RE.fullmatch(f"v{version}"):
         return None
     return version, distance
+
+
+def _nearest_release_version(repo_dir: Path) -> tuple[str, int] | None:
+    """The nearest release of either tagging scheme: CalVer ``vYYYY.M.D`` or RC ``rc.N-vX.Y.Z``.
+
+    Both are real release points in this repo's history, so the one that produces the
+    smaller commit distance is the one actually running.
+    """
+    candidates = [c for c in (_semver_release_version(repo_dir), _calver_release_version(repo_dir)) if c]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda c: c[1])
 
 
 # --- Install stamp reader ---------------------------------------------------
@@ -245,7 +282,7 @@ def _git_version_info(repo_dir: Path, *, include_untracked: bool = False) -> Ver
         _run_git(repo_dir, "rev-list", "--count", f"v{base_version}..HEAD")
     ) if releases else None
     if not releases:
-        base_version, distance = _calver_release_version(repo_dir) or ("unknown", None)
+        base_version, distance = _nearest_release_version(repo_dir) or ("unknown", None)
     short_commit = _run_git(repo_dir, "rev-parse", "--short=7", "HEAD")
     if base_version == "unknown" and short_commit:
         display_version = f"git.{short_commit}{'.dirty' if dirty else ''}"
