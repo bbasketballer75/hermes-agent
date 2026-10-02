@@ -179,11 +179,23 @@ def _compute_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]
     repo_dir = repo_dir or _resolve_repo_dir()
     if repo_dir is None:
         return _baked_banner_state()
-    upstream, local = (source_check._git_stdout(["rev-parse", "--short=8", rev], cwd=repo_dir) for rev in ("origin/main", "HEAD"))
+    # Prefer an `upstream` remote. On the fork layout hermes-update.cmd produces
+    # (origin=fork, fork=fork, upstream=NousResearch), `origin/main` is the user's own
+    # fork — so labelling it "upstream" prints the fork's head as if it were the project's,
+    # and counting `origin/main..HEAD` against it reports a bogus "carried commits" total.
+    # The local ref can also be stale relative to the real remote until the next fetch.
+    ref = ""
+    for candidate in ("upstream/main", "origin/main"):
+        if source_check._git_ok(["rev-parse", "--verify", "--quiet", f"refs/remotes/{candidate}"],
+                                cwd=repo_dir):
+            ref = candidate
+            break
+    upstream = source_check._git_stdout(["rev-parse", "--short=8", ref], cwd=repo_dir) if ref else None
+    local = source_check._git_stdout(["rev-parse", "--short=8", "HEAD"], cwd=repo_dir)
     if not upstream or not local:
-        # Live-git lookup failed (e.g. shallow clone without origin/main).
+        # Live-git lookup failed (e.g. shallow clone without a remote-tracking branch).
         return _baked_banner_state()
-    ahead = source_check._git_count(["rev-list", "--count", "origin/main..HEAD"], cwd=repo_dir) or 0
+    ahead = source_check._git_count(["rev-list", "--count", f"{ref}..HEAD"], cwd=repo_dir) or 0
     return {"upstream": upstream, "local": local, "ahead": max(ahead, 0)}
 
 

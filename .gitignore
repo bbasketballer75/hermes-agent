@@ -319,3 +319,11 @@ native/fts5_cjk/*.so
 /pm/.lock.json.lock
 
 apps/desktop/.dist-build*
+
+# 2026-10-02: desktop build output must never be committed. update_from_pins.py
+# ends with `git add -A`, which swept an untracked release-next/ (386 MB, Hermes.exe
+# 204 MB) into a commit and made the fork push fail on GitHub's 100 MB file limit.
+apps/desktop/release/
+apps/desktop/release-next/
+apps/desktop/dist/
+apps/desktop/build/
