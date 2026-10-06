@@ -97,14 +97,20 @@ export function readStampedCommit(root: string): string | null {
  * Extracted so the platform branch does not sit inside `applyBody`: that
  * function's complexity is ratcheted against its value on main, and it may
  * only go down.
+ *
+ * The platform is threaded through to both resolvers rather than left to
+ * their `process.platform` default. In production `isWindows` comes from the
+ * real platform so the two agree, but defaulting internally made the whole
+ * decision untestable — a test could not exercise the Windows case from a
+ * Linux runner, which is exactly what let the original bug ship.
  */
 function resolvePlatformScriptHandoff(
   updateRoot: string,
   isWindows: boolean,
 ): UpdateScriptHandoff | null {
   return isWindows
-    ? resolveUpdateScriptHandoff(updateRoot)
-    : resolvePosixScriptHandoff(updateRoot)
+    ? resolveUpdateScriptHandoff(updateRoot, { isWindows })
+    : resolvePosixScriptHandoff(updateRoot, { isWindows })
 }
 
 /**
