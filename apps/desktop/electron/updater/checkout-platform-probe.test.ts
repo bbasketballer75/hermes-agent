@@ -43,8 +43,16 @@ describe('checkout strategy — platform-correct hand-off probe', () => {
     fs.rmSync(home, { recursive: true, force: true })
   })
 
-  function depsFor(isWindows: boolean, isMac: boolean): CheckoutStrategyDeps {
-    return {
+  function depsFor(
+    isWindows: boolean,
+    isMac: boolean,
+  ): { deps: CheckoutStrategyDeps; rememberLog: ReturnType<typeof vi.fn> } {
+    // Held separately rather than read back off `deps`: CheckoutStrategyDeps
+    // types these as plain functions, so `.mock` is not on the interface and
+    // reaching through it fails typecheck (TS2339).
+    const rememberLog = vi.fn()
+
+    const deps: CheckoutStrategyDeps = {
       readSourceUpdate: vi.fn().mockResolvedValue({
         supported: true,
         updateAvailable: true,
@@ -63,7 +71,7 @@ describe('checkout strategy — platform-correct hand-off probe', () => {
       resolveUpdaterBinary: vi.fn((): null => null),
       remoteGatewayActive: (): boolean => false,
       emitUpdateProgress: vi.fn(),
-      rememberLog: vi.fn(),
+      rememberLog,
       startHermes: vi.fn(async (): Promise<void> => {}),
       stopBackendsForUpdate: vi.fn(async (): Promise<void> => {}),
       repairMacUpdaterHelper: vi.fn(),
@@ -72,13 +80,15 @@ describe('checkout strategy — platform-correct hand-off probe', () => {
       markQuittingForHandoff: vi.fn(),
       quit: vi.fn(),
     }
+
+    return { deps, rememberLog }
   }
 
   it('macOS with posix.sh present does NOT land on the manual card', async () => {
     fs.mkdirSync(path.join(root, 'scripts', 'desktop-update'), { recursive: true })
     fs.writeFileSync(path.join(root, 'scripts', 'desktop-update', 'posix.sh'), '#!/bin/bash\n')
 
-    const deps = depsFor(false, true)
+    const { deps, rememberLog } = depsFor(false, true)
     const strategy = createCheckoutStrategy(deps)
 
     const result = await strategy.apply()
@@ -86,12 +96,12 @@ describe('checkout strategy — platform-correct hand-off probe', () => {
     // Before the fix this returned { manual: true }. The posix hand-off must
     // be selected instead, so `manual` must be absent.
     expect(result.manual).toBeUndefined()
-    const logged = deps.rememberLog.mock.calls.map((c) => String(c[0])).join('\n')
+    const logged = rememberLog.mock.calls.map((c) => String(c[0])).join('\n')
     expect(logged).not.toContain('surfacing manual')
   })
 
   it('macOS without posix.sh still falls back to the manual card', async () => {
-    const deps = depsFor(false, true)
+    const { deps } = depsFor(false, true)
     const strategy = createCheckoutStrategy(deps)
 
     const result = await strategy.apply()
@@ -103,18 +113,18 @@ describe('checkout strategy — platform-correct hand-off probe', () => {
     fs.mkdirSync(path.join(root, 'scripts', 'desktop-update'), { recursive: true })
     fs.writeFileSync(path.join(root, 'scripts', 'desktop-update', 'windows.ps1'), '# noop\n')
 
-    const deps = depsFor(true, false)
+    const { deps, rememberLog } = depsFor(true, false)
     const strategy = createCheckoutStrategy(deps)
 
     const result = await strategy.apply()
 
     expect(result.manual).toBeUndefined()
-    const logged = deps.rememberLog.mock.calls.map((c) => String(c[0])).join('\n')
+    const logged = rememberLog.mock.calls.map((c) => String(c[0])).join('\n')
     expect(logged).not.toContain('surfacing manual')
   })
 
   it('Windows without windows.ps1 still falls back to the manual card', async () => {
-    const deps = depsFor(true, false)
+    const { deps } = depsFor(true, false)
     const strategy = createCheckoutStrategy(deps)
 
     const result = await strategy.apply()
@@ -129,7 +139,7 @@ describe('checkout strategy — platform-correct hand-off probe', () => {
     fs.mkdirSync(path.join(root, 'scripts', 'desktop-update'), { recursive: true })
     fs.writeFileSync(path.join(root, 'scripts', 'desktop-update', 'posix.sh'), '#!/bin/bash\n')
 
-    const deps = depsFor(true, false)
+    const { deps } = depsFor(true, false)
     const strategy = createCheckoutStrategy(deps)
 
     const result = await strategy.apply()
