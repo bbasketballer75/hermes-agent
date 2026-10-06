@@ -5,6 +5,7 @@ import * as path from 'node:path'
 
 import { updateHandoffConflict, writeUpdateMarker } from '../update-marker'
 import {
+  type UpdateScriptHandoff,
   collectRelaunchArgs,
   describeUpdaterHandoffFailure,
   observeUpdaterHandoff,
@@ -80,6 +81,30 @@ export function readStampedCommit(root: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * The repo-owned hand-off script for THIS platform, or null when the
+ * checkout predates it.
+ *
+ * The two resolvers are strict opposites: `resolveUpdateScriptHandoff`
+ * returns null unconditionally off Windows, and `resolvePosixScriptHandoff`
+ * returns null on Windows. Calling the wrong one made the shared
+ * "no staged updater" guard permanently true on macOS/Linux, so every
+ * checkout install was handed the manual `hermes update` card even when
+ * `scripts/desktop-update/posix.sh` was present.
+ *
+ * Extracted so the platform branch does not sit inside `applyBody`: that
+ * function's complexity is ratcheted against its value on main, and it may
+ * only go down.
+ */
+function resolvePlatformScriptHandoff(
+  updateRoot: string,
+  isWindows: boolean,
+): UpdateScriptHandoff | null {
+  return isWindows
+    ? resolveUpdateScriptHandoff(updateRoot)
+    : resolvePosixScriptHandoff(updateRoot)
 }
 
 /**
@@ -187,23 +212,13 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
       // manual one-liner.
       const updateRoot = deps.resolveUpdateRoot()
 
-      // Probe with the resolver that matches THIS platform.
-      //
-      // `resolveUpdateScriptHandoff` returns null unconditionally off Windows
-      // (it only ever looks for scripts/desktop-update/windows.ps1), so
-      // calling it here made this guard unconditionally true on macOS/Linux:
-      // every checkout install was handed the manual `hermes update` card even
-      // when scripts/desktop-update/posix.sh was present, and
-      // `applyPosixHandoff` below — which probes with the correct
-      // `resolvePosixScriptHandoff` — was unreachable from here.
-      //
-      // Symptom: macOS `desktop-installer@latest -> open-app-update` legs
-      // failing at "Update HEAD -> NEXT" with
+      // Probe with the resolver that matches THIS platform — see
+      // `resolvePlatformScriptHandoff`. Symptom when the wrong one was used:
+      // macOS `desktop-installer@latest -> open-app-update` legs failing at
+      // "Update HEAD -> NEXT" with
       // `[updates] no staged updater; surfacing manual ...`
       // (hermes-agent#80, 4 legs, one class).
-      const scriptHandoff = deps.isWindows
-        ? resolveUpdateScriptHandoff(updateRoot)
-        : resolvePosixScriptHandoff(updateRoot)
+      const scriptHandoff = resolvePlatformScriptHandoff(updateRoot, deps.isWindows)
 
       if (!scriptHandoff) {
         const command: string = manualCommand
