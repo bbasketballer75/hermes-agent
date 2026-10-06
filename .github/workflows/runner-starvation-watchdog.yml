@@ -1,0 +1,238 @@
+name: Runner starvation watchdog
+
+# CI failure mode that looks like success.
+#
+# Every lane that actually verifies this repo is pinned to a larger runner
+# label (`ubuntu-latest-32-core`, `windows-latest-32-core`,
+# `windows-latest-32-arm-core`). Those labels are configured at the org level
+# and cost money, so they are the part of the runner setup that lapses,
+# exhausts quota, or drifts in label name. When they stop being satisfiable
+# the affected jobs sit in `queued` indefinitely:
+#
+#     queued    : 12
+#     cancelled : 4
+#     success   : 0
+#     failure   : 0
+#
+# Nothing goes red. A PR reads `mergeable_state: unstable` with twenty-odd
+# perpetually-queued jobs, and a human scanning for red concludes "fine".
+# The two *required* checks are lint jobs on `ubuntu-latest`, which keep
+# running — so the gate stays green while the entire unit suite, every
+# OS-specific suite, and every Windows install/E2E leg verifies nothing.
+#
+# This workflow exists to convert that absence of evidence into an explicit
+# signal. It deliberately runs on `ubuntu-latest` (known-good, and unaffected
+# by whatever is wrong with the larger labels) and takes no `pull_request`
+# trigger, because a watchdog that depends on the thing it watches cannot
+# report the thing it watches.
+
+on:
+  schedule:
+    # Hourly. A lane stuck for 90 minutes is already well past any healthy
+    # queue time; an hourly tick catches it within ~2h without spamming.
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      stuck_minutes:
+        description: 'Minutes a job may stay queued before it counts as starved'
+        required: false
+        default: '90'
+
+permissions:
+  actions: read
+  issues: write
+
+concurrency:
+  # Ticks collapse rather than queue. A watchdog that can fall behind its
+  # own backlog is a watchdog you stop reading.
+  group: runner-starvation-watchdog
+  cancel-in-progress: true
+
+jobs:
+  watchdog:
+    name: Report starved lanes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Detect starved verification lanes
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v9.0.0
+        with:
+          script: |
+            // A manual run may pass `stuck_minutes`; a scheduled tick has
+            // no payload and takes the default.
+            const dispatched = Number(
+              (context.payload && context.payload.inputs
+                ? context.payload.inputs.stuck_minutes
+                : '') || 0,
+            );
+            const stuckMinutes = dispatched > 0 ? dispatched : 90;
+
+            // Lanes that do real verification. These are exactly the jobs
+            // that use a 32-core larger runner label, plus the Windows
+            // install/update E2E legs in install-e2e-windows-run.yml.
+            // Narrow on purpose: matching every job would make the watchdog
+            // fire on ordinary lint/docker/nix work.
+            const HEAVY_LANE =
+              /(Run tests \(|Windows-only tests|Windows E2E|Windows install \+ update E2E|\/ e2e( |$|-upgrade)|Desktop .* E2E|cargo test)/;
+            const RUN_WORKFLOWS = ['CI', 'Install & Update E2E'];
+
+            const now = Date.now();
+            const cutoff = now - 24 * 60 * 60 * 1000; // ignore ancient queued runs
+            const stuck = [];
+
+            const { data: runs } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 25,
+            });
+
+            for (const run of runs.data.filter(
+              (r) =>
+                RUN_WORKFLOWS.includes(r.name || '') &&
+                new Date(r.created_at).getTime() > cutoff,
+            )) {
+              let jobs = [];
+              try {
+                jobs = await github.paginate(
+                  github.rest.actions.listJobsForWorkflowRun,
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    run_id: run.id,
+                    per_page: 100,
+                  },
+                  (res) => res.data,
+                );
+              } catch (err) {
+                core.warning(
+                  'could not list jobs for run ' + run.id + ': ' + err.message,
+                );
+                continue;
+              }
+
+              for (const job of jobs) {
+                if (job.status === 'completed') continue;
+                if (!HEAVY_LANE.test(job.name || '')) continue;
+
+                // GitHub sets `started_at` when a job is *created*, not when
+                // it gets a runner, so age the queue entry from there.
+                const queuedSince = new Date(
+                  job.started_at || run.created_at,
+                ).getTime();
+                const minutes = Math.round((now - queuedSince) / 60000);
+                if (minutes < stuckMinutes) continue;
+
+                stuck.push({
+                  run: run.name,
+                  job: job.name,
+                  url: job.html_url,
+                  minutes: minutes,
+                });
+              }
+            }
+
+            const MARKER = '<!-- runner-starvation-watchdog -->';
+
+            if (stuck.length === 0) {
+              // Silent when healthy. A watchdog that comments on every tick
+              // is ignored inside a week, and then it protects nothing.
+              core.info(
+                'healthy: no verification lane queued longer than ' +
+                  stuckMinutes +
+                  'm',
+              );
+              return;
+            }
+
+            stuck.sort((a, b) => b.minutes - a.minutes);
+
+            const rows = stuck.map(
+              (s) =>
+                '| `' +
+                s.run +
+                '` | [' +
+                s.job +
+                '](' +
+                s.url +
+                ') | ' +
+                Math.floor(s.minutes / 60) +
+                'h ' +
+                (s.minutes % 60) +
+                'm |',
+            );
+
+            const table = [
+              '| Workflow | Job | Queued for |',
+              '| --- | --- | --- |',
+            ]
+              .concat(rows)
+              .join('\n');
+
+            const body = [
+              MARKER,
+              '### Verification lanes starved',
+              '',
+              stuck.length +
+                ' job(s) have been waiting for a runner for more than ' +
+                stuckMinutes +
+                ' minutes.',
+              'Nothing is red — these lanes simply never start, so **no',
+              'verification is happening in them.**',
+              '',
+              table,
+              '',
+              'The usual cause is that the larger-runner labels this repo',
+              'depends on (`ubuntu-latest-32-core`, `windows-latest-32-core`,',
+              '`windows-latest-32-arm-core`) are no longer being satisfied: the',
+              'runner groups are offline, the larger-runner minute allocation',
+              'lapsed or is exhausted, or a label was renamed.',
+              '',
+              'Check, in order:',
+              '',
+              '1. <https://github.com/organizations/NousResearch/settings/actions/runners>',
+              '   — runner groups, and whether any are online',
+              '2. <https://github.com/settings/billing>',
+              '   — larger-runner minutes still allocated',
+              '3. <https://github.com/basketballer75/hermes-agent/settings/actions/runners>',
+              '   — repo-visible self-hosted registrations',
+              '',
+              '_Opened by `runner-starvation-watchdog`. This issue is rewritten',
+              'in place on each detection and closes itself when every lane',
+              'reports a verdict._',
+              '',
+              '<!-- last-seen: ' + new Date(now).toISOString() + ' -->',
+            ].join('\n');
+
+            const { data: existing } =
+              await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                per_page: 100,
+              });
+
+            const found = existing.find((i) =>
+              (i.body || '').includes(MARKER),
+            );
+
+            if (found) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: found.number,
+                body: body,
+              });
+              core.info('updated existing issue #' + found.number);
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'CI verification lanes are starved (no runner)',
+                body: body,
+                // no-auto-analysis keeps the issue-responder from analysing
+                // its own watchdog tracker — same class of bot-tracker issue
+                // that collected 43 agent comments in September.
+                labels: ['no-auto-analysis', 'github-actions'],
+              });
+              core.info('opened starvation issue');
+            }
