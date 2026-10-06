@@ -148,9 +148,36 @@ def _packaged_desktop_current_for_head(desktop_dir: Path, project_root: Path) ->
     return not _desktop_build_needed(desktop_dir, project_root, source_mode=False)
 
 
+def _desktop_release_dir(desktop_dir: Path) -> Path:
+    """Return the directory that holds the live unpacked desktop app.
+
+    2026-10-05: ``hermes-update.cmd`` packages the desktop app to
+    ``%LOCALAPPDATA%\\hermes-desktop-build`` so the build tree sits OUTSIDE the
+    Hermes home. That was needed because the agent runtime's workspace watcher
+    holds delete-deny handles on files inside the workspace, and on Windows a
+    directory cannot be renamed while anything inside it holds one -- so
+    ``_swap_staged_desktop_app`` promoting into ``apps/desktop/release/`` failed
+    every time with EBUSY / WinError 5.
+
+    Every reader of the live app must agree on where "live" is, or the updater
+    writes one tree while this code swaps another. ``HERMES_DESKTOP_RELEASE_DIR``
+    overrides; otherwise prefer the external root when it exists, else fall back
+    to the in-tree default so a stock install still works.
+    """
+    override = os.environ.get("HERMES_DESKTOP_RELEASE_DIR")
+    if override:
+        return Path(override).expanduser()
+    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_appdata:
+        external = Path(local_appdata) / "hermes-desktop-build"
+        if external.is_dir():
+            return external
+    return desktop_dir / "release"
+
+
 def _desktop_packaged_executable(desktop_dir: Path) -> Optional[Path]:
     """Return the current platform's unpacked Electron app executable."""
-    return _desktop_packaged_executable_in(desktop_dir / "release")
+    return _desktop_packaged_executable_in(_desktop_release_dir(desktop_dir))
 
 
 def _desktop_packaged_executable_in(release_dir: Path) -> Optional[Path]:
@@ -246,7 +273,7 @@ def _swap_staged_desktop_app(desktop_dir: Path, staging_dir: Path) -> Optional[P
     if staged_exe is None:
         shutil.rmtree(staging_dir, ignore_errors=True)
         return None
-    release_dir = desktop_dir / "release"
+    release_dir = _desktop_release_dir(desktop_dir)
     try:
         staged_root = _desktop_unpacked_root(staged_exe, staging_dir)
         live_root = release_dir / staged_root.name
@@ -449,7 +476,7 @@ def _desktop_ancestor_in(desktop_dir: Path) -> Optional[int]:
     needs, and it cannot be stopped without killing this process first. Never raises."""
     try:
         import psutil
-        release_dir = (desktop_dir / "release").resolve()
+        release_dir = _desktop_release_dir(desktop_dir).resolve()
         ancestors = list(psutil.Process(os.getpid()).parents())
     except Exception:
         return None
@@ -471,7 +498,7 @@ def _stop_desktop_processes_locking_build(desktop_dir: Path, *, also_posix: bool
         return []
     try:
         import psutil
-        release_dir = (desktop_dir / "release").resolve()
+        release_dir = _desktop_release_dir(desktop_dir).resolve()
     except Exception:
         return []
     if not release_dir.is_dir():
