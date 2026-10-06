@@ -7,6 +7,11 @@
   "assume_yes": false,
   "commits": [
     {
+      "sha": "45f465034a",
+      "action": "keep",
+      "note": "fix(desktop): promote the staged app into the same external dir the updater builds into. hermes_cli/main_desktop.py. Without it the desktop self-updater can never succeed on this machine. No upstream counterpart (2026-10-05)."
+    },
+    {
       "sha": "88149ac8c7",
       "action": "keep",
       "note": "fix(version): read release-candidate tags, not just CalVer, for the base version. hermes_cli/version_info.py. Without this the install reports 0.18.0+32299 while actually running 0.21.5+77. No upstream counterpart (2026-09-30)."
