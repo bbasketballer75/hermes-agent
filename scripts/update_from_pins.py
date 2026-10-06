@@ -251,7 +251,7 @@ def main() -> int:
         print(f"ERROR: pins file {args.pins} is not a file", file=sys.stderr)
         return 1
 
-    pins = json.loads(args.pins.read_text(encoding="utf-8"))
+    pins = json.loads(args.pins.read_text(encoding="utf-8-sig"))
 
     if args.verify:
         return verify_against_pins(args.repo, pins, args.against)
