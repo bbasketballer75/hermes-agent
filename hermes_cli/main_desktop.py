@@ -476,7 +476,7 @@ def _desktop_ancestor_in(desktop_dir: Path) -> Optional[int]:
     needs, and it cannot be stopped without killing this process first. Never raises."""
     try:
         import psutil
-        release_dir = (desktop_dir / "release").resolve()
+        release_dir = _desktop_release_dir(desktop_dir).resolve()
         ancestors = list(psutil.Process(os.getpid()).parents())
     except Exception:
         return None
@@ -498,7 +498,7 @@ def _stop_desktop_processes_locking_build(desktop_dir: Path, *, also_posix: bool
         return []
     try:
         import psutil
-        release_dir = (desktop_dir / "release").resolve()
+        release_dir = _desktop_release_dir(desktop_dir).resolve()
     except Exception:
         return []
     if not release_dir.is_dir():
