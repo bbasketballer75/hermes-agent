@@ -178,16 +178,34 @@ export function createCheckoutStrategy(deps: CheckoutStrategyDeps): UpdaterStrat
     }
 
     if (!updater || status.channel) {
-      // No staged updater binary — this is a CLI-installed user (they ran
-      // `hermes desktop`, never the Tauri installer that self-copies
-      // hermes-setup.exe into HERMES_HOME). On Windows the repo hand-off
-      // script serves them just as well as installer users — it only needs
-      // PowerShell and the checkout — so fall through to the normal hand-off
-      // when the script exists. Only when the checkout predates the script do
-      // we surface the manual one-liner.
+      // No staged updater binary — a checkout install (they ran
+      // `hermes desktop`, never an installer that self-copies
+      // hermes-setup.exe into HERMES_HOME). The repo-owned hand-off script
+      // serves them just as well as installer users — it only needs the
+      // checkout — so fall through to the normal hand-off when the script
+      // exists. Only when the checkout predates the script do we surface the
+      // manual one-liner.
       const updateRoot = deps.resolveUpdateRoot()
 
-      if (!resolveUpdateScriptHandoff(updateRoot)) {
+      // Probe with the resolver that matches THIS platform.
+      //
+      // `resolveUpdateScriptHandoff` returns null unconditionally off Windows
+      // (it only ever looks for scripts/desktop-update/windows.ps1), so
+      // calling it here made this guard unconditionally true on macOS/Linux:
+      // every checkout install was handed the manual `hermes update` card even
+      // when scripts/desktop-update/posix.sh was present, and
+      // `applyPosixHandoff` below — which probes with the correct
+      // `resolvePosixScriptHandoff` — was unreachable from here.
+      //
+      // Symptom: macOS `desktop-installer@latest -> open-app-update` legs
+      // failing at "Update HEAD -> NEXT" with
+      // `[updates] no staged updater; surfacing manual ...`
+      // (hermes-agent#80, 4 legs, one class).
+      const scriptHandoff = deps.isWindows
+        ? resolveUpdateScriptHandoff(updateRoot)
+        : resolvePosixScriptHandoff(updateRoot)
+
+      if (!scriptHandoff) {
         const command: string = manualCommand
 
         deps.rememberLog(
