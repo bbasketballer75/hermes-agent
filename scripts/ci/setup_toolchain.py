@@ -198,7 +198,8 @@ def install(args) -> None:
         if binary.parent not in exported_dirs:
             raise ValueError(
                 f"PM installed {name} at {binary} but exported no PATH entry "
-                f"for {binary.parent}"
+                f"for {binary.parent}; exported directories were "
+                + ", ".join(path)
             )
     print("PM toolchain ready: " + ", ".join(f"{name} {facts.get(name)['version']}" for name in names))
 
