@@ -179,6 +179,27 @@ def install(args) -> None:
     file_commands("GITHUB_ENV", exported)
     file_commands("GITHUB_OUTPUT", outputs)
     add_path(path)
+
+    # An explicitly requested package that installs successfully but exports
+    # no PATH entry is otherwise invisible until some later step reports a
+    # missing tool — e.g. the screen-record action failing with "ffmpeg not on
+    # PATH", several steps later and inside a different action, with nothing
+    # connecting that failure back to here.
+    #
+    # Observed 2026-10-07 on all five install-E2E legs that pass
+    # `packages: ffmpeg`: `PM toolchain ready: ffmpeg 9.0.1` printed, then
+    # `command -v ffmpeg` failed seconds later. Raise at the export site so
+    # the package is named at the point where it was dropped.
+    exported_dirs = set(path)
+    for name in args.packages:
+        binary = binaries.get(name)
+        if binary is None:
+            continue
+        if binary.parent not in exported_dirs:
+            raise ValueError(
+                f"PM installed {name} at {binary} but exported no PATH entry "
+                f"for {binary.parent}"
+            )
     print("PM toolchain ready: " + ", ".join(f"{name} {facts.get(name)['version']}" for name in names))
 
 
