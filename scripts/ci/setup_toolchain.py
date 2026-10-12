@@ -128,7 +128,7 @@ def install(args) -> None:
 
     from pm import build_requirements_environment
     from pm.cli import _live_progress
-    from pm.install import ensure, env_for
+    from pm.install import _heal_exec_bit as heal_exec_bit, ensure, env_for
     from pm.lock import Facts
     from pm.package import compose_env
     from pm.packages import uv_cache_dir
@@ -145,6 +145,18 @@ def install(args) -> None:
         name: get_package(name).binary(store_root() / facts.get(name)["entry"], target)
         for name in public_names
     }
+    # A ZIP-sourced package arrives without its exec bit — extraction does not
+    # restore Unix modes, and modes are not part of the pinned digest. ffmpeg on
+    # macOS is exactly this shape (martin-riedl ZIP, single binary), so it lands
+    # 0644 and `command -v ffmpeg` reports nothing even though the directory is
+    # on PATH and the file is present. Linux uses tar.xz and Windows ignores the
+    # bit, which is why this only ever surfaced on macOS.
+    for name, binary in binaries.items():
+        if binary is not None and not heal_exec_bit(binary):
+            raise ValueError(
+                f"PM installed {name} at {binary} but could not restore its "
+                f"execute bit; it would not be runnable from PATH"
+            )
     environment = env_for(*public_names, base_env={})
     path = environment["PATH"].split(os.pathsep)
     environment = compose_env([environment])
