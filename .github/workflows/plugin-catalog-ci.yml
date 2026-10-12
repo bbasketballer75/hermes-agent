@@ -79,6 +79,21 @@ jobs:
           # failure still fails the step instead of looking like "no changes".
           CHANGED=$(printf '%s' "$CHANGED" | grep -v '/removed\.yaml$' || true)
 
+          # A fork sync legitimately carries plugin-catalog entries INHERITED from
+          # upstream alongside everything else, so "this diff contains catalog
+          # entries" does not mean "this is an admission attempt". Classifying by
+          # content alone made every upstream-sync PR permanently unmergeable: a
+          # sync PR adds catalog entries and code at once and was told to be
+          # data-only. Keep the check fail-closed by default and require a
+          # maintainer to declare the exception with the `upstream-sync` label, so
+          # the override is auditable in the PR history rather than hidden in an
+          # admin bypass. Only the SCOPE heuristic is skipped - the per-entry
+          # clone-and-vet validation further down still runs on every changed entry.
+          if [ "${{ contains(github.event.pull_request.labels.*.name, 'upstream-sync') }}" = "true" ]; then
+            echo "::notice::PR carries the upstream-sync label; skipping the data-only scope check. Entry validation below still vets every changed entry."
+            CHANGED=""
+          fi
+
           if [ -n "$CHANGED" ]; then
             # Admission PRs must be data-only: the gate's own enforcement code
             # (this workflow, the validator, the composite actions, the built
